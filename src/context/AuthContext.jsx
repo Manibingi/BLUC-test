@@ -20,7 +20,10 @@ export const AuthProvider = ({ children }) => {
   const fetchUserProfile = async () => {
     try {
       setLoading(true);
+    
       const response = await api.user.getProfile();
+      console.log("response",response)
+      console.log("response data",response.data)
       const userData = response.data;
       console.log('User profile fetched:', userData);
 
