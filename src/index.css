@@ -1,0 +1,111 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --primary: #2563eb;
+  --primary-dark: #1d4ed8;
+  --primary-light: #3b82f6;
+  --secondary: #ef4444;
+  --background: #f9fafb;
+  --text: #111827;
+  --text-light: #6b7280;
+}
+
+body {
+  font-family: 'Inter', sans-serif;
+  @apply bg-gray-50 text-gray-900;
+}
+
+.bluc-btn-primary {
+  @apply bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors;
+}
+
+.bluc-btn-secondary {
+  @apply bg-gray-200 hover:bg-gray-300 text-gray-800 font-medium py-2 px-4 rounded-lg transition-colors;
+}
+
+.bluc-modal {
+  @apply fixed inset-0 flex items-center justify-center z-50 bg-black bg-opacity-60 transition-opacity duration-300;
+}
+
+.bluc-modal-content {
+  @apply bg-white rounded-xl shadow-xl max-w-md w-full mx-4 transition-transform duration-300 transform;
+}
+
+.video-container {
+  @apply relative h-full overflow-hidden;
+}
+
+.local-video {
+  @apply absolute bottom-4 right-4 w-32 h-24 md:w-48 md:h-36 rounded-lg shadow-lg z-10 border-2 border-white;
+}
+
+.remote-video {
+  @apply w-full h-full object-cover;
+}
+
+/* Cool animation for loading/waiting */
+.pulse {
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.fade-in {
+  animation: fadeIn 0.5s ease-in-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.slide-up {
+  animation: slideUp 0.3s ease-out;
+}
+
+@keyframes slideUp {
+  from {
+    transform: translateY(20px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+/* Input and form styling */
+.bluc-input {
+  @apply w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all;
+}
+
+/* Gender selection styling */
+.gender-option {
+  @apply flex flex-col items-center justify-center border rounded-lg p-4 cursor-pointer transition-colors;
+}
+
+.gender-option.selected {
+  @apply border-blue-500 bg-blue-50;
+}
+
+/* Video controls bar */
+.video-controls {
+  @apply absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent p-4 flex justify-center gap-4;
+}
+
+.video-control-btn {
+  @apply w-12 h-12 rounded-full bg-white/20 flex items-center justify-center text-white hover:bg-white/30 transition-colors;
+}
