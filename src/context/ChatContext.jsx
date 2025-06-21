@@ -71,9 +71,7 @@ export const ChatProvider = ({ children }) => {
 
     console.log("[Socket] Initializing socket connection...");
     const socketInstance = window.socket || io(
-      process.env.NODE_ENV === 'production'
-        ? 'https://buzzy-server-nu.vercel.app'
-        : 'http://localhost:3000',
+      import.meta.env.VITE_BACKEND_URL,
       {
         transports: ['websocket'],
         withCredentials: true,
