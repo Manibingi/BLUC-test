@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import api from '../services/api';
 import { useMyContext } from './MyContext';
 import { useLocation, useNavigate } from 'react-router-dom';
+import axios from 'axios';
 
 const AuthContext = createContext();
 
