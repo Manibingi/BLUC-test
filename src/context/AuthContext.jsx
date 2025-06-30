@@ -124,7 +124,13 @@ export const AuthProvider = ({ children }) => {
 
   const updateProfile = async (profileData) => {
     try {
-      const response = await api.user.updateProfile(profileData);
+     const response = await axios.put(`${import.meta.env.VITE_BACKEND_URL}/api/auth/profile`, profileData, {
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+
+        }
+      });
       const updatedUser = {
         ...user,
         ...response.data,
