@@ -22,7 +22,12 @@ export const AuthProvider = ({ children }) => {
   const fetchUserProfile = async () => {
     try {
       setLoading(true);
-      const response = await api.user.getProfile();
+     const response = await axios.get(`${import.meta.env.VITE_BACKEND_URL}/api/auth/user/profile`, {
+        headers: {  
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        }
+      });
       const userData = response.data;
       console.log('User profile fetched:', userData);
 
