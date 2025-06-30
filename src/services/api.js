@@ -109,12 +109,7 @@ const user = {
   },
   
   updateProfile: async (profileData) => {
-    return axios.put(`${import.meta.env.VITE_BACKEND_URL}/api/auth/profile`, profileData, {
-      headers: {
-      'Content-Type': 'application/json',
-      authorization: `Bearer ${localStorage.getItem('token')}`
-      }
-    });
+    return api.put('/auth/profile', profileData);
   }
 };
 
