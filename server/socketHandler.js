@@ -17,7 +17,6 @@ export default (io, socket) => {
 
   socket.on('user-details', ({ gender, interest, name, mode, selectedGender }) => {
     socket.data = { gender, interest, selectedGender };
-    console.log("printing the data in io",io)
     console.log("20. In user-details-on, with socket.data: ", socket.data);
     // console.log(socket.data);
     console.log(`User ${socket.id} joined with gender: ${gender}, interest: ${interest} for ${mode}`);
@@ -98,7 +97,10 @@ export default (io, socket) => {
   });
 
   socket.on("ice-candidate", (candidate, toSocketId) => {
+    console.log("Received ICE candidate from socket:", socket.id, "to:", toSocketId);
+    console.log("Candidate details:", candidate);
     const target = io.sockets.sockets.get(toSocketId);
+    console.log("Target socket for ICE candidate:", target ? target.id : "not found");
     if (target) {
       target.emit("ice-candidate", candidate);
     }

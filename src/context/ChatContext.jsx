@@ -18,8 +18,8 @@ export const ChatProvider = ({ children }) => {
   const [selectedGender, setSelectedGender] = useState("random");
   const [peerConnection, setPeerConnection] = useState(null);
   const callStartedRef = useRef(false);
-  const pendingCandidates = useRef([]); 
-   const [interest, setMyInterest ]=useState(null);
+  const pendingCandidates = useRef([]);
+  const [interest, setMyInterest] = useState(null);
   const [trialTimer, setTrialTimer] = useState(180); // 3 minutes in seconds
   const [genderSelectionFrozen, setGenderSelectionFrozen] = useState(false);
   const [trialUsed, setTrialUsed] = useState(false);
@@ -27,9 +27,9 @@ export const ChatProvider = ({ children }) => {
 
   const iceServers = {
     iceServers: [
-      { urls: "stun:stun.l.google.com:19302" },
+      { urls: ["stun:stun.l.google.com:19302", "stun:stun.l.google.com:19302"] },
       {
-        urls: 'turn:relay1.expressturn.com:3480',
+        urls: ['turn:relay1.expressturn.com:3480'],
         username: '174672462322246224',
         credential: 'wPWy5/Q8xaF3LVOKZOdExrhnZ+4='
       }
@@ -71,9 +71,7 @@ export const ChatProvider = ({ children }) => {
 
     console.log("[Socket] Initializing socket connection...");
     const socketInstance = window.socket || io(
-      process.env.NODE_ENV === 'production'
-        ? 'https://buzzy-server-nu.vercel.app'
-        : 'http://localhost:3000',
+      import.meta.env.VITE_BACKEND_URL,
       {
         transports: ['websocket'],
         withCredentials: true,
@@ -158,22 +156,23 @@ export const ChatProvider = ({ children }) => {
       }
     });
 
-    socketInstance.on('start-call', () => {
-      setTimeout(() => {
-      console.log("[Socket] Received 'start-call'");
-      const remoteVideo = document.getElementById("remoteVideo");
-      
-      const localVideo = document.getElementById("localVideo");
-      const localStream = localVideo?.srcObject;
+    // socketInstance.on('start-call', () => {
+    //   setTimeout(() => {
+    //     console.log("[Socket] Received 'start-call'");
+    //     const remoteVideo = document.getElementById("remoteVideo");
 
-      if (matchDetails?.partnerId && localStream) {
-        console.log("[Call] Starting video call with:", matchDetails.partnerId);
-        startVideoCall(matchDetails.partnerId, localStream, remoteVideo);
-      } else {
-        console.warn("[Call] Cannot start call — missing partnerId or localStream");
-      }
-    },200);
-    });
+    //     const localVideo = document.getElementById("localVideo");
+    //     console.log("localVideo", localVideo);
+    //     const localStream = localVideo?.srcObject;
+
+    //     if (matchDetails?.partnerId && localStream) {
+    //       console.log("[Call] Starting video call with:", matchDetails.partnerId);
+    //       startVideoCall(matchDetails.partnerId, localStream, remoteVideo);
+    //     } else {
+    //       console.warn("[Call] Cannot start call — missing partnerId or localStream");
+    //     }
+    //   }, 200);
+    // });
 
     socketInstance.on("cleanup", () => {
       console.log("[Socket] Received 'cleanup' event");
@@ -209,7 +208,7 @@ export const ChatProvider = ({ children }) => {
         }
       });
       peerConnection.close();
-      console.log("10. in cleanupMatch function peerConnection is set to null",peerConnection);
+      console.log("10. in cleanupMatch function peerConnection is set to null", peerConnection);
       setPeerConnection(null);
     }
 
@@ -332,11 +331,17 @@ export const ChatProvider = ({ children }) => {
         }
       };
 
-      pc.ontrack = (event) => {
+      const remoteVideo = new MediaStream();
+      remoteVideoElement.srcObject = remoteVideo;
+      // remoteVideoElement.play().catch(() => {});
+      pc.ontrack = (event) => { 
         console.log("[Call] Received remote track.");
-        if (remoteVideoElement && event.streams[0]) {
-          remoteVideoElement.srcObject = event.streams[0];
-        }
+        // if (remoteVideoElement && event.streams[0]) {
+        //   remoteVideoElement.srcObject = event.streams[0];
+        // }
+        event.streams[0].getTracks().forEach((track) => {
+          remoteVideo.addTrack(track);
+        });
       };
 
       // pc.ontrack = (event) => {
@@ -485,7 +490,7 @@ export const ChatProvider = ({ children }) => {
     isMatched,
     matchDetails,
     selectedGender,
-    initializeSocket, 
+    initializeSocket,
     interest,
     disconnectSocket,
     disconnectFromMatch,
@@ -493,8 +498,8 @@ export const ChatProvider = ({ children }) => {
     setSelectedGender: handleGenderSelection,
     setIsConnecting,
     sendMessage,
-    startVideoCall, 
-     setMyInterest,
+    startVideoCall,
+    setMyInterest,
     endVideoCall,
     togglePremium,
     trialTimer,

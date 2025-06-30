@@ -77,7 +77,7 @@ router.post('/login', async (req, res) => {
 router.put('/profile', authMiddleware, async (req, res) => {
   try {
     const { fullName, gender, dateOfBirth, interests, trialUsed } = req.body;
-    
+    console.log("error")
     const updateData = {
       ...(fullName && { fullName }),
       ...(gender && { gender }),

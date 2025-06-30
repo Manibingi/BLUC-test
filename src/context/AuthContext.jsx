@@ -1,7 +1,9 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import api from '../services/api';
+
 import { useMyContext } from './MyContext';
 import { useLocation, useNavigate } from 'react-router-dom';
+import axios from 'axios';
 
 const AuthContext = createContext();
 
@@ -20,7 +22,12 @@ export const AuthProvider = ({ children }) => {
   const fetchUserProfile = async () => {
     try {
       setLoading(true);
-      const response = await api.user.getProfile();
+      // const response = await api.user.getProfile();
+      const response = await axios.get(`${import.meta.env.VITE_BACKEND_URL}/api/auth/user/profile`, {
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem('token')}`
+        }
+      });
       const userData = response.data;
       console.log('User profile fetched:', userData);
 
@@ -123,6 +130,7 @@ export const AuthProvider = ({ children }) => {
         ...response.data,
         isProfileComplete: true
       };
+      
       setUser(updatedUser);
       setShowProfileModal(false);
       return response.data;

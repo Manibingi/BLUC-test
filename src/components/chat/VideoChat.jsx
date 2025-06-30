@@ -26,7 +26,7 @@ const VideoChat = ({ mode }) => {
   const [isCallActive, setIsCallActive] = useState(false);
 
   // Initialize local stream only once
-  
+
   useEffect(() => {
     if (!streamInitializedRef.current) {
       initLocalStream();
