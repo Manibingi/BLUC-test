@@ -23,17 +23,28 @@ export const ChatProvider = ({ children }) => {
   const [trialUsed, setTrialUsed] = useState(false);
   const [isPremium, setIsPremium] = useState(false);
   const isCleaningUpRef = useRef(false);
+  const localStreamRef = useRef(null);
+  const remoteStreamRef = useRef(null);
 
   const iceServers = {
     iceServers: [
       { urls: ["stun:stun.l.google.com:19302"] },
       { urls: ["stun:stun1.l.google.com:19302"] },
+      { urls: ["stun:stun2.l.google.com:19302"] },
+      { urls: ["stun:stun3.l.google.com:19302"] },
+      { urls: ["stun:stun4.l.google.com:19302"] },
       {
         urls: ['turn:relay1.expressturn.com:3480'],
         username: '174672462322246224',
         credential: 'wPWy5/Q8xaF3LVOKZOdExrhnZ+4='
+      },
+      {
+        urls: ['turn:relay1.expressturn.com:3481'],
+        username: '174672462322246224',
+        credential: 'wPWy5/Q8xaF3LVOKZOdExrhnZ+4='
       }
-    ]
+    ],
+    iceCandidatePoolSize: 10
   };
 
   useEffect(() => {
@@ -68,11 +79,11 @@ export const ChatProvider = ({ children }) => {
 
   const initializeSocket = (gender, interest, name, mode) => {
     if (socketRef.current?.connected) {
-      console.log("[Socket] Already connected, reusing existing connection");
+      console.log("[ChatContext] Already connected, reusing existing connection");
       return socketRef.current;
     }
 
-    console.log("[Socket] Initializing new socket connection...");
+    console.log("[ChatContext] Initializing new socket connection...");
     const socketInstance = io(import.meta.env.VITE_BACKEND_URL, {
       transports: ['websocket'],
       withCredentials: true,
@@ -87,26 +98,26 @@ export const ChatProvider = ({ children }) => {
     window.socket = socketInstance;
 
     socketInstance.on('connect', () => {
-      console.log("[Socket] Connected with ID:", socketInstance.id);
+      console.log("[ChatContext] Connected with ID:", socketInstance.id);
       const genderToSend = (user?.isPremium || (!trialUsed && trialTimer > 0)) ? selectedGender : "random";
-      console.log("[Socket] Emitting user-details:", { gender, interest, name, mode, selectedGender: genderToSend });
+      console.log("[ChatContext] Emitting user-details:", { gender, interest, name, mode, selectedGender: genderToSend });
       socketInstance.emit('user-details', { gender, interest, name, mode, selectedGender: genderToSend });
       setIsConnecting(true);
     });
 
     socketInstance.on('connect_error', (error) => {
-      console.error("[Socket] Connection error:", error);
+      console.error("[ChatContext] Connection error:", error);
       setIsConnecting(false);
     });
 
     socketInstance.on('disconnect', (reason) => {
-      console.log("[Socket] Disconnected:", reason);
+      console.log("[ChatContext] Disconnected:", reason);
       setIsConnecting(false);
       cleanupMatch();
     });
 
     socketInstance.on('find other', async () => {
-      console.log("[Socket] Received 'find other' event");
+      console.log("[ChatContext] Received 'find other' event");
       if (isCleaningUpRef.current) return;
       
       await cleanupMatch();
@@ -115,7 +126,7 @@ export const ChatProvider = ({ children }) => {
         if (socketInstance.connected && user) {
           setIsConnecting(true);
           const genderToSend = (user.isPremium || (!trialUsed && trialTimer > 0)) ? selectedGender : "random";
-          console.log("[Socket] Re-emitting user-details after find other");
+          console.log("[ChatContext] Re-emitting user-details after find other");
           socketInstance.emit('user-details', {
             gender: user.gender,
             interest: interest,
@@ -128,18 +139,18 @@ export const ChatProvider = ({ children }) => {
     });
 
     socketInstance.on('match-found', async (data) => {
-      console.log("[Socket] Match found:", data);
+      console.log("[ChatContext] Match found:", data);
       if (data.matched && data.socketId) {
         await cleanupMatch();
         setIsMatched(true);
         setIsConnecting(false);
         setMatchDetails({ partnerId: data.socketId });
-        console.log("[Match] Set match details:", { partnerId: data.socketId });
+        console.log("[ChatContext] Set match details:", { partnerId: data.socketId });
       }
     });
 
     socketInstance.on('disconect', (message) => {
-      console.log("[Socket] Partner disconnected:", message);
+      console.log("[ChatContext] Partner disconnected:", message);
       cleanupMatch();
     });
 
@@ -147,7 +158,7 @@ export const ChatProvider = ({ children }) => {
   };
 
   const disconnectSocket = () => {
-    console.log("[Socket] Disconnecting...");
+    console.log("[ChatContext] Disconnecting...");
     isCleaningUpRef.current = true;
     
     if (socketRef.current) {
@@ -165,31 +176,34 @@ export const ChatProvider = ({ children }) => {
     if (isCleaningUpRef.current) return;
     isCleaningUpRef.current = true;
     
-    console.log("[Call] Cleaning up match and peer connection...");
+    console.log("[ChatContext] Cleaning up match and peer connection...");
     
     setIsMatched(false);
     setMatchDetails(null);
 
     // Clean up peer connection
     if (peerConnection) {
-      console.log("[Call] Closing peer connection...");
+      console.log("[ChatContext] Closing peer connection...");
       
       // Remove all event listeners
       peerConnection.onicecandidate = null;
       peerConnection.ontrack = null;
       peerConnection.onconnectionstatechange = null;
       peerConnection.oniceconnectionstatechange = null;
+      peerConnection.onsignalingstatechange = null;
       
       // Stop all tracks
       peerConnection.getReceivers().forEach(receiver => {
         if (receiver.track) {
           receiver.track.stop();
+          console.log("[ChatContext] Stopped receiver track:", receiver.track.kind);
         }
       });
       
       peerConnection.getSenders().forEach(sender => {
         if (sender.track) {
           sender.track.stop();
+          console.log("[ChatContext] Stopped sender track:", sender.track.kind);
         }
       });
       
@@ -197,14 +211,13 @@ export const ChatProvider = ({ children }) => {
       setPeerConnection(null);
     }
 
-    // Clean up remote video
-    const remoteVideo = document.querySelector('video[autoplay]:not([muted])');
-    if (remoteVideo) {
-      if (remoteVideo.srcObject) {
-        const tracks = remoteVideo.srcObject.getTracks();
-        tracks.forEach(track => track.stop());
-      }
-      remoteVideo.srcObject = null;
+    // Clean up remote stream reference
+    if (remoteStreamRef.current) {
+      remoteStreamRef.current.getTracks().forEach(track => {
+        track.stop();
+        console.log("[ChatContext] Stopped remote stream track:", track.kind);
+      });
+      remoteStreamRef.current = null;
     }
 
     callStartedRef.current = false;
@@ -225,17 +238,17 @@ export const ChatProvider = ({ children }) => {
   const disconnectFromMatch = (mode) => {
     const socket = socketRef.current;
     if (socket && matchDetails) {
-      console.log("[Match] Disconnecting from partner:", matchDetails.partnerId);
+      console.log("[ChatContext] Disconnecting from partner:", matchDetails.partnerId);
       socket.emit('disconnect-chat', matchDetails.partnerId, mode);
       cleanupMatch();
     }
   };
 
   const next = (mode) => {
-    console.log("[Match] Skipping to next partner...");
+    console.log("[ChatContext] Skipping to next partner...");
     const socket = socketRef.current;
     if (socket && matchDetails) {
-      console.log("[Match] Emitting next with partnerId:", matchDetails.partnerId);
+      console.log("[ChatContext] Emitting next with partnerId:", matchDetails.partnerId);
       socket.emit('next', matchDetails.partnerId, mode);
     }
   };
@@ -243,86 +256,122 @@ export const ChatProvider = ({ children }) => {
   const sendMessage = (message, partnerId) => {
     const socket = socketRef.current;
     if (socket && partnerId) {
-      console.log("[Chat] Sending message to", partnerId, ":", message);
+      console.log("[ChatContext] Sending message to", partnerId, ":", message);
       socket.emit('send-message', message, partnerId);
     }
   };
 
   const startVideoCall = async (partnerId, localStream, remoteVideoElement) => {
     if (!partnerId || !localStream || !remoteVideoElement) {
-      console.error("[Call] Missing required parameters for video call");
+      console.error("[ChatContext] Missing required parameters for video call");
       return;
     }
 
     const socket = socketRef.current;
     if (!socket || !socket.connected) {
-      console.error("[Call] Socket not connected");
+      console.error("[ChatContext] Socket not connected");
       return;
     }
 
-    console.log("[Call] Starting video call with partner:", partnerId);
+    console.log("[ChatContext] Starting video call with partner:", partnerId);
+    localStreamRef.current = localStream;
 
     try {
       // Clean up existing connection
       if (peerConnection) {
-        console.log("[Call] Cleaning up existing peer connection");
+        console.log("[ChatContext] Cleaning up existing peer connection");
         peerConnection.close();
         setPeerConnection(null);
       }
 
-      // Create new peer connection
+      // Create new peer connection with better configuration
       const pc = new RTCPeerConnection(iceServers);
       setPeerConnection(pc);
 
-      // Add local stream tracks
+      // Add local stream tracks with better error handling
       localStream.getTracks().forEach(track => {
-        console.log("[Call] Adding local track:", track.kind);
-        pc.addTrack(track, localStream);
+        console.log("[ChatContext] Adding local track:", track.kind, track.readyState);
+        try {
+          const sender = pc.addTrack(track, localStream);
+          console.log("[ChatContext] Track added successfully:", sender);
+        } catch (error) {
+          console.error("[ChatContext] Error adding track:", error);
+        }
       });
 
-      // Handle ICE candidates
+      // Handle ICE candidates with better error handling
       pc.onicecandidate = (event) => {
         if (event.candidate) {
-          console.log("[ICE] Sending ICE candidate");
+          console.log("[ChatContext] Sending ICE candidate:", event.candidate.type);
           socket.emit("ice-candidate", event.candidate, partnerId);
         } else {
-          console.log("[ICE] All ICE candidates sent");
+          console.log("[ChatContext] All ICE candidates sent");
         }
       };
 
-      // Handle remote stream
+      // Handle remote stream with improved logic
       pc.ontrack = (event) => {
-        console.log("[Call] Received remote track:", event.track.kind);
-        console.log("[Call] Remote streams count:", event.streams.length);
+        console.log("[ChatContext] Received remote track:", event.track.kind, event.track.readyState);
+        console.log("[ChatContext] Remote streams count:", event.streams.length);
         
         if (event.streams && event.streams[0]) {
           const remoteStream = event.streams[0];
-          console.log("[Call] Setting remote stream to video element");
+          remoteStreamRef.current = remoteStream;
           
-          // Ensure video element is ready
+          console.log("[ChatContext] Setting remote stream to video element");
+          console.log("[ChatContext] Remote stream tracks:", remoteStream.getTracks().map(t => `${t.kind}: ${t.readyState}`));
+          
+          // Ensure video element is ready and set stream
           if (remoteVideoElement) {
             remoteVideoElement.srcObject = remoteStream;
+            
+            // Force video to load and play
             remoteVideoElement.onloadedmetadata = () => {
-              console.log("[Call] Remote video metadata loaded, attempting to play");
-              remoteVideoElement.play().catch(e => {
-                console.error("[Call] Remote video play failed:", e);
+              console.log("[ChatContext] Remote video metadata loaded, attempting to play");
+              remoteVideoElement.play().then(() => {
+                console.log("[ChatContext] Remote video playing successfully");
+              }).catch(e => {
+                console.error("[ChatContext] Remote video play failed:", e);
+                // Try to play again after a short delay
+                setTimeout(() => {
+                  remoteVideoElement.play().catch(console.error);
+                }, 1000);
               });
+            };
+
+            // Additional event listeners for debugging
+            remoteVideoElement.oncanplay = () => {
+              console.log("[ChatContext] Remote video can play");
+            };
+
+            remoteVideoElement.onplaying = () => {
+              console.log("[ChatContext] Remote video is playing");
+            };
+
+            remoteVideoElement.onerror = (e) => {
+              console.error("[ChatContext] Remote video error:", e);
             };
           }
         }
       };
 
-      // Monitor connection state
+      // Monitor connection state with detailed logging
       pc.onconnectionstatechange = () => {
-        console.log("[Call] Connection state:", pc.connectionState);
-        if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
-          console.log("[Call] Connection failed, cleaning up");
+        console.log("[ChatContext] Connection state:", pc.connectionState);
+        if (pc.connectionState === 'connected') {
+          console.log("[ChatContext] Peer connection established successfully");
+        } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+          console.log("[ChatContext] Connection failed, cleaning up");
           cleanupMatch();
         }
       };
 
       pc.oniceconnectionstatechange = () => {
-        console.log("[Call] ICE connection state:", pc.iceConnectionState);
+        console.log("[ChatContext] ICE connection state:", pc.iceConnectionState);
+      };
+
+      pc.onsignalingstatechange = () => {
+        console.log("[ChatContext] Signaling state:", pc.signalingState);
       };
 
       // Remove existing listeners to prevent duplicates
@@ -331,108 +380,113 @@ export const ChatProvider = ({ children }) => {
       socket.off("ice-candidate");
       socket.off("end-video");
 
-      // Handle video offer
+      // Handle video offer with improved error handling
       socket.on("video-offer", async (offer, fromSocketId) => {
         try {
-          console.log("[Call] Received video offer from:", fromSocketId);
-          console.log("[Call] Current signaling state:", pc.signalingState);
+          console.log("[ChatContext] Received video offer from:", fromSocketId);
+          console.log("[ChatContext] Current signaling state:", pc.signalingState);
 
           if (pc.signalingState !== "stable") {
-            console.log("[Call] Not in stable state, performing rollback");
+            console.log("[ChatContext] Not in stable state, performing rollback");
             await pc.setLocalDescription({ type: "rollback" });
           }
 
           await pc.setRemoteDescription(new RTCSessionDescription(offer));
-          console.log("[Call] Set remote description successfully");
+          console.log("[ChatContext] Set remote description successfully");
 
-          const answer = await pc.createAnswer();
+          const answer = await pc.createAnswer({
+            offerToReceiveAudio: true,
+            offerToReceiveVideo: true
+          });
+          
           await pc.setLocalDescription(answer);
-          console.log("[Call] Created and set local answer");
+          console.log("[ChatContext] Created and set local answer");
 
           socket.emit("video-answer", answer, fromSocketId);
-          console.log("[Call] Sent video answer");
+          console.log("[ChatContext] Sent video answer");
 
           // Process pending ICE candidates
           for (const candidate of pendingCandidates.current) {
             try {
               await pc.addIceCandidate(candidate);
-              console.log("[ICE] Added pending candidate");
+              console.log("[ChatContext] Added pending candidate");
             } catch (e) {
-              console.error("[ICE] Error adding pending candidate:", e);
+              console.error("[ChatContext] Error adding pending candidate:", e);
             }
           }
           pendingCandidates.current = [];
 
         } catch (error) {
-          console.error("[Call] Error handling video offer:", error);
+          console.error("[ChatContext] Error handling video offer:", error);
         }
       });
 
-      // Handle video answer
+      // Handle video answer with improved error handling
       socket.on("video-answer", async (answer) => {
         try {
-          console.log("[Call] Received video answer");
-          console.log("[Call] Current signaling state:", pc.signalingState);
+          console.log("[ChatContext] Received video answer");
+          console.log("[ChatContext] Current signaling state:", pc.signalingState);
 
           if (pc.signalingState === "have-local-offer") {
             await pc.setRemoteDescription(new RTCSessionDescription(answer));
-            console.log("[Call] Set remote description from answer");
+            console.log("[ChatContext] Set remote description from answer");
 
             // Process pending ICE candidates
             for (const candidate of pendingCandidates.current) {
               try {
                 await pc.addIceCandidate(candidate);
-                console.log("[ICE] Added pending candidate after answer");
+                console.log("[ChatContext] Added pending candidate after answer");
               } catch (e) {
-                console.error("[ICE] Error adding pending candidate:", e);
+                console.error("[ChatContext] Error adding pending candidate:", e);
               }
             }
             pendingCandidates.current = [];
           }
         } catch (error) {
-          console.error("[Call] Error handling video answer:", error);
+          console.error("[ChatContext] Error handling video answer:", error);
         }
       });
 
-      // Handle ICE candidates
+      // Handle ICE candidates with improved error handling
       socket.on("ice-candidate", async (candidate) => {
         try {
-          console.log("[ICE] Received ICE candidate");
+          console.log("[ChatContext] Received ICE candidate:", candidate.type);
           const iceCandidate = new RTCIceCandidate(candidate);
           
           if (pc.remoteDescription && pc.remoteDescription.type) {
             await pc.addIceCandidate(iceCandidate);
-            console.log("[ICE] Added ICE candidate");
+            console.log("[ChatContext] Added ICE candidate successfully");
           } else {
-            console.log("[ICE] Queuing ICE candidate (no remote description yet)");
+            console.log("[ChatContext] Queuing ICE candidate (no remote description yet)");
             pendingCandidates.current.push(iceCandidate);
           }
         } catch (error) {
-          console.error("[ICE] Error adding ICE candidate:", error);
+          console.error("[ChatContext] Error adding ICE candidate:", error);
         }
       });
 
       // Handle call end
       socket.on("end-video", () => {
-        console.log("[Call] Received end-video signal");
+        console.log("[ChatContext] Received end-video signal");
         cleanupMatch();
       });
 
-      // Create and send offer
-      console.log("[Call] Creating offer...");
+      // Create and send offer with better configuration
+      console.log("[ChatContext] Creating offer...");
       const offer = await pc.createOffer({
         offerToReceiveAudio: true,
-        offerToReceiveVideo: true
+        offerToReceiveVideo: true,
+        iceRestart: false
       });
       
       await pc.setLocalDescription(offer);
-      console.log("[Call] Set local description, sending offer");
+      console.log("[ChatContext] Set local description, sending offer");
       
       socket.emit("video-offer", offer, partnerId);
-      console.log("[Call] Video offer sent to:", partnerId);
+      console.log("[ChatContext] Video offer sent to:", partnerId);
 
     } catch (error) {
-      console.error('[Call] Error starting video call:', error);
+      console.error('[ChatContext] Error starting video call:', error);
       cleanupMatch();
     }
   };
@@ -440,7 +494,7 @@ export const ChatProvider = ({ children }) => {
   const endVideoCall = () => {
     const socket = socketRef.current;
     if (socket && matchDetails) {
-      console.log("[Call] Ending video call with:", matchDetails.partnerId);
+      console.log("[ChatContext] Ending video call with:", matchDetails.partnerId);
       socket.emit("end-call", matchDetails.partnerId);
     }
     cleanupMatch();
@@ -448,7 +502,7 @@ export const ChatProvider = ({ children }) => {
 
   const handleGenderSelection = (gender) => {
     if (user?.isPremium || (!trialUsed && trialTimer > 0)) {
-      console.log("[Gender] Selected:", gender);
+      console.log("[ChatContext] Selected:", gender);
       setSelectedGender(gender);
     }
   };

@@ -22,6 +22,7 @@ const VideoChat = ({ mode }) => {
   const { isConnecting, setIsConnecting, isMatched, matchDetails } = useChat();
   const navigate = useNavigate();
   const [isCallActive, setIsCallActive] = useState(false);
+  const [remoteStreamReceived, setRemoteStreamReceived] = useState(false);
 
   // Initialize local stream only once
   useEffect(() => {
@@ -36,7 +37,10 @@ const VideoChat = ({ mode }) => {
 
       try {
         if (localStream) {
-          localStream.getTracks().forEach(track => track.stop());
+          localStream.getTracks().forEach(track => {
+            track.stop();
+            console.log("[Cleanup] Stopped local track:", track.kind);
+          });
         }
 
         if (isMatched) {
@@ -59,24 +63,29 @@ const VideoChat = ({ mode }) => {
   // Handle video call when matched - improved with better timing and error handling
   useEffect(() => {
     if (localStream && matchDetails?.partnerId && !isCallActive) {
-      console.log("Starting video call with partner:", matchDetails.partnerId);
+      console.log("[VideoChat] Starting video call with partner:", matchDetails.partnerId);
       
       // Clean up any existing remote stream
       if (remoteVideoRef.current) {
         if (remoteVideoRef.current.srcObject) {
           const tracks = remoteVideoRef.current.srcObject.getTracks();
-          tracks.forEach(track => track.stop());
+          tracks.forEach(track => {
+            track.stop();
+            console.log("[VideoChat] Stopped existing remote track:", track.kind);
+          });
         }
         remoteVideoRef.current.srcObject = null;
+        setRemoteStreamReceived(false);
       }
       
       // Add a small delay to ensure socket is ready
       const timer = setTimeout(() => {
         if (remoteVideoRef.current && localStream && matchDetails?.partnerId) {
+          console.log("[VideoChat] Calling startVideoCall");
           startVideoCall(matchDetails.partnerId, localStream, remoteVideoRef.current);
           setIsCallActive(true);
         }
-      }, 500);
+      }, 1000); // Increased delay
 
       return () => clearTimeout(timer);
     }
@@ -84,40 +93,57 @@ const VideoChat = ({ mode }) => {
 
   const initLocalStream = async () => {
     try {
-      console.log("Initializing local media stream...");
+      console.log("[VideoChat] Initializing local media stream...");
       const stream = await navigator.mediaDevices.getUserMedia({ 
         video: { 
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          frameRate: { ideal: 30 }
+          width: { ideal: 1280, max: 1920 },
+          height: { ideal: 720, max: 1080 },
+          frameRate: { ideal: 30, max: 60 }
         }, 
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
-          autoGainControl: true
+          autoGainControl: true,
+          sampleRate: 44100
         }
       });
       
-      console.log("Local stream obtained:", stream);
+      console.log("[VideoChat] Local stream obtained:", stream);
+      console.log("[VideoChat] Video tracks:", stream.getVideoTracks().length);
+      console.log("[VideoChat] Audio tracks:", stream.getAudioTracks().length);
       
       // Set local video streams
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = stream;
         localVideoRef.current.muted = true; // Prevent echo
         localVideoRef.current.playsInline = true;
+        localVideoRef.current.autoplay = true;
+        
+        // Ensure video plays
+        localVideoRef.current.onloadedmetadata = () => {
+          localVideoRef.current.play().catch(e => {
+            console.error("[VideoChat] Local video play failed:", e);
+          });
+        };
       }
       
       if (localVideoStreamMobileRef.current) {
         localVideoStreamMobileRef.current.srcObject = stream;
         localVideoStreamMobileRef.current.muted = true;
         localVideoStreamMobileRef.current.playsInline = true;
+        localVideoStreamMobileRef.current.autoplay = true;
+        
+        localVideoStreamMobileRef.current.onloadedmetadata = () => {
+          localVideoStreamMobileRef.current.play().catch(e => {
+            console.error("[VideoChat] Local mobile video play failed:", e);
+          });
+        };
       }
       
       setLocalStream(stream);
-      console.log("Local stream set successfully");
+      console.log("[VideoChat] Local stream set successfully");
     } catch (error) {
-      console.error('Error accessing media devices:', error);
-      // Handle permission denied or device not available
+      console.error('[VideoChat] Error accessing media devices:', error);
       alert('Camera/microphone access is required for video chat. Please allow permissions and refresh the page.');
     }
   };
@@ -134,7 +160,7 @@ const VideoChat = ({ mode }) => {
       if (videoTrack) {
         videoTrack.enabled = !videoTrack.enabled;
         setIsVideoEnabled(videoTrack.enabled);
-        console.log("Video toggled:", videoTrack.enabled);
+        console.log("[VideoChat] Video toggled:", videoTrack.enabled);
       }
     }
   };
@@ -145,15 +171,16 @@ const VideoChat = ({ mode }) => {
       if (audioTrack) {
         audioTrack.enabled = !audioTrack.enabled;
         setIsAudioEnabled(audioTrack.enabled);
-        console.log("Audio toggled:", audioTrack.enabled);
+        console.log("[VideoChat] Audio toggled:", audioTrack.enabled);
       }
     }
   };
 
   const handleSkipMatch = async () => {
-    console.log("Skipping to next match...");
+    console.log("[VideoChat] Skipping to next match...");
     try {
       setIsCallActive(false);
+      setRemoteStreamReceived(false);
       
       // Clean up remote video immediately and properly
       if (remoteVideoRef.current) {
@@ -161,25 +188,46 @@ const VideoChat = ({ mode }) => {
           const tracks = remoteVideoRef.current.srcObject.getTracks();
           tracks.forEach(track => {
             track.stop();
-            console.log("Stopped remote track:", track.kind);
+            console.log("[VideoChat] Stopped remote track during skip:", track.kind);
           });
         }
         remoteVideoRef.current.srcObject = null;
-        console.log("Remote video cleared");
+        console.log("[VideoChat] Remote video cleared during skip");
       }
       
       await next(mode);
     } catch (error) {
-      console.error('Error during skip:', error);
+      console.error('[VideoChat] Error during skip:', error);
     }
   };
 
   const selectGender = (gender) => {
     if (isPremium || (!trialUsed && trialTimer > 0)) {
-      console.log("Gender selected:", gender);
+      console.log("[VideoChat] Gender selected:", gender);
       setSelectedGender(gender);
     }
   };
+
+  // Listen for remote stream updates
+  useEffect(() => {
+    const checkRemoteStream = () => {
+      if (remoteVideoRef.current && remoteVideoRef.current.srcObject) {
+        const stream = remoteVideoRef.current.srcObject;
+        const videoTracks = stream.getVideoTracks();
+        const audioTracks = stream.getAudioTracks();
+        
+        console.log("[VideoChat] Remote stream check - Video tracks:", videoTracks.length, "Audio tracks:", audioTracks.length);
+        
+        if (videoTracks.length > 0 || audioTracks.length > 0) {
+          setRemoteStreamReceived(true);
+          console.log("[VideoChat] Remote stream received and active");
+        }
+      }
+    };
+
+    const interval = setInterval(checkRemoteStream, 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   return (
     <div className="flex flex-col h-screen bg-gray-50 overflow-hidden">
@@ -189,9 +237,11 @@ const VideoChat = ({ mode }) => {
         <div className="w-full h-1/2 md:w-2/5 md:h-full relative flex flex-col gap-2 p-2 overflow-hidden flex-shrink-0">
           {/* Remote Video */}
           <div className="flex-1 bg-black flex items-center justify-center relative rounded-md overflow-hidden min-h-0 max-h-full">
-            {(!isMatched || !isCallActive) && (
+            {(!isMatched || !isCallActive || !remoteStreamReceived) && (
               <div className="absolute z-10 text-white text-lg left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-center px-4">
-                {isConnecting ? "Finding someone to chat with..." : "Waiting for match..."}
+                {isConnecting ? "Finding someone to chat with..." : 
+                 isMatched && isCallActive ? "Connecting video..." : 
+                 "Waiting for match..."}
               </div>
             )}
             <video
@@ -201,12 +251,28 @@ const VideoChat = ({ mode }) => {
               muted={false}
               className="w-full h-full object-cover max-w-full max-h-full"
               onLoadedMetadata={() => {
-                console.log("Remote video metadata loaded");
+                console.log("[VideoChat] Remote video metadata loaded");
                 if (remoteVideoRef.current) {
-                  remoteVideoRef.current.play().catch(e => console.error("Remote video play failed:", e));
+                  remoteVideoRef.current.play().then(() => {
+                    console.log("[VideoChat] Remote video playing successfully");
+                    setRemoteStreamReceived(true);
+                  }).catch(e => {
+                    console.error("[VideoChat] Remote video play failed:", e);
+                  });
                 }
               }}
-              onError={(e) => console.error("Remote video error:", e)}
+              onLoadedData={() => {
+                console.log("[VideoChat] Remote video data loaded");
+                setRemoteStreamReceived(true);
+              }}
+              onCanPlay={() => {
+                console.log("[VideoChat] Remote video can play");
+                setRemoteStreamReceived(true);
+              }}
+              onError={(e) => {
+                console.error("[VideoChat] Remote video error:", e);
+                setRemoteStreamReceived(false);
+              }}
             />
             {/* Local Video Overlay for mobile/tablet */}
             <div className="absolute top-2 right-2 w-20 h-20 md:hidden border-2 border-white rounded-md overflow-hidden shadow-lg bg-gray-800">
@@ -216,7 +282,7 @@ const VideoChat = ({ mode }) => {
                 autoPlay
                 muted
                 playsInline
-                onError={(e) => console.error("Local mobile video error:", e)}
+                onError={(e) => console.error("[VideoChat] Local mobile video error:", e)}
               />
             </div>
           </div>
@@ -229,7 +295,7 @@ const VideoChat = ({ mode }) => {
               autoPlay
               muted
               playsInline
-              onError={(e) => console.error("Local desktop video error:", e)}
+              onError={(e) => console.error("[VideoChat] Local desktop video error:", e)}
             />
           </div>
 
