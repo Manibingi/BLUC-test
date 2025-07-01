@@ -1,3 +1,4 @@
+
 import React, { useEffect, useRef, useState } from 'react';
 import { useChat } from '../../context/ChatContext';
 import { useAuth } from '../../context/AuthContext';
@@ -13,12 +14,15 @@ const VideoChat = ({ mode }) => {
   const localVideoStreamMobileRef = useRef(null);
   const connectionAttemptRef = useRef(0);
   const maxConnectionAttempts = 3;
+  const retryTimeoutRef = useRef(null);
 
   const [localStream, setLocalStream] = useState(null);
+  const [remoteStream, setRemoteStream] = useState(null);
   const [isVideoEnabled, setIsVideoEnabled] = useState(true);
   const [isAudioEnabled, setIsAudioEnabled] = useState(true);
   const [connectionState, setConnectionState] = useState('new');
   const [iceConnectionState, setIceConnectionState] = useState('new');
+  const [hasRemoteVideo, setHasRemoteVideo] = useState(false);
   
   const { 
     socket, 
@@ -61,6 +65,13 @@ const VideoChat = ({ mode }) => {
           });
         }
 
+        if (remoteStream) {
+          remoteStream.getTracks().forEach(track => {
+            track.stop();
+            console.log(`[VideoChat] Stopped remote ${track.kind} track`);
+          });
+        }
+
         if (isMatched && matchDetails?.partnerId) {
           await endVideoCall();
           await disconnectFromMatch(mode);
@@ -80,7 +91,7 @@ const VideoChat = ({ mode }) => {
         handleUnload();
       }
     };
-  }, []);
+  }, [localStream, remoteStream, isMatched, matchDetails, endVideoCall, disconnectFromMatch, mode]);
 
   // Monitor peer connection state
   useEffect(() => {
@@ -95,7 +106,7 @@ const VideoChat = ({ mode }) => {
           handleConnectionFailure();
         } else if (state === 'connected') {
           console.log('[VideoChat] Peer connection established successfully');
-          connectionAttemptRef.current = 0; // Reset attempt counter on success
+          connectionAttemptRef.current = 0;
         }
       };
 
@@ -106,16 +117,41 @@ const VideoChat = ({ mode }) => {
         
         if (state === 'failed') {
           console.log('[VideoChat] ICE connection failed, restarting ICE');
-          peerConnection.restartIce();
+          if (peerConnection.connectionState !== 'closed') {
+            peerConnection.restartIce();
+          }
+        }
+      };
+
+      const handleTrack = (event) => {
+        console.log('[VideoChat] Received remote track:', event.track.kind);
+        if (event.streams && event.streams[0]) {
+          const stream = event.streams[0];
+          console.log('[VideoChat] Setting remote stream with tracks:', stream.getTracks().map(t => t.kind));
+          setRemoteStream(stream);
+          setHasRemoteVideo(true);
+          
+          // Set stream to video elements
+          if (remoteVideoRef.current) {
+            remoteVideoRef.current.srcObject = stream;
+            remoteVideoRef.current.onloadedmetadata = () => {
+              console.log('[VideoChat] Remote video metadata loaded');
+              remoteVideoRef.current.play().catch(e => 
+                console.error('[VideoChat] Remote video play failed:', e)
+              );
+            };
+          }
         }
       };
 
       peerConnection.addEventListener('connectionstatechange', handleConnectionStateChange);
       peerConnection.addEventListener('iceconnectionstatechange', handleIceConnectionStateChange);
+      peerConnection.addEventListener('track', handleTrack);
 
       return () => {
         peerConnection.removeEventListener('connectionstatechange', handleConnectionStateChange);
         peerConnection.removeEventListener('iceconnectionstatechange', handleIceConnectionStateChange);
+        peerConnection.removeEventListener('track', handleTrack);
       };
     }
   }, [peerConnection]);
@@ -125,18 +161,18 @@ const VideoChat = ({ mode }) => {
     if (localStream && matchDetails?.partnerId && !isCallActive && isMatched) {
       console.log("[VideoChat] Starting video call with partner:", matchDetails.partnerId);
       
-      // Clean up any existing remote stream
+      // Clear remote stream state
+      setRemoteStream(null);
+      setHasRemoteVideo(false);
+      
+      // Clear remote video element
       if (remoteVideoRef.current) {
-        if (remoteVideoRef.current.srcObject) {
-          const tracks = remoteVideoRef.current.srcObject.getTracks();
-          tracks.forEach(track => track.stop());
-        }
         remoteVideoRef.current.srcObject = null;
       }
       
-      // Start the video call with a slight delay to ensure socket is ready
+      // Start the video call with a delay to ensure socket is ready
       const timer = setTimeout(() => {
-        if (localStream && matchDetails?.partnerId && !isCallActive) {
+        if (localStream && matchDetails?.partnerId && !isCallActive && isMatched) {
           startVideoCall(matchDetails.partnerId, localStream, remoteVideoRef.current);
           setIsCallActive(true);
         }
@@ -152,7 +188,17 @@ const VideoChat = ({ mode }) => {
       setIsCallActive(false);
       setConnectionState('new');
       setIceConnectionState('new');
+      setRemoteStream(null);
+      setHasRemoteVideo(false);
       connectionAttemptRef.current = 0;
+      
+      if (remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = null;
+      }
+      
+      if (retryTimeoutRef.current) {
+        clearTimeout(retryTimeoutRef.current);
+      }
     }
   }, [isMatched]);
 
@@ -238,30 +284,33 @@ const VideoChat = ({ mode }) => {
     console.log(`[VideoChat] Connection attempt ${connectionAttemptRef.current}/${maxConnectionAttempts}`);
 
     try {
-      // Wait a bit before retrying
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      if (localStream && matchDetails?.partnerId && isMatched) {
-        console.log('[VideoChat] Retrying video call...');
-        setIsCallActive(false);
-        
-        // Clean up remote video
-        if (remoteVideoRef.current) {
-          if (remoteVideoRef.current.srcObject) {
-            const tracks = remoteVideoRef.current.srcObject.getTracks();
-            tracks.forEach(track => track.stop());
-          }
-          remoteVideoRef.current.srcObject = null;
-        }
-        
-        // Restart the call
-        setTimeout(() => {
-          if (localStream && matchDetails?.partnerId && !isCallActive) {
-            startVideoCall(matchDetails.partnerId, localStream, remoteVideoRef.current);
-            setIsCallActive(true);
-          }
-        }, 1000);
+      // Clear any existing retry timeout
+      if (retryTimeoutRef.current) {
+        clearTimeout(retryTimeoutRef.current);
       }
+      
+      // Wait before retrying
+      retryTimeoutRef.current = setTimeout(async () => {
+        if (localStream && matchDetails?.partnerId && isMatched) {
+          console.log('[VideoChat] Retrying video call...');
+          setIsCallActive(false);
+          setRemoteStream(null);
+          setHasRemoteVideo(false);
+          
+          // Clean up remote video
+          if (remoteVideoRef.current) {
+            remoteVideoRef.current.srcObject = null;
+          }
+          
+          // Restart the call
+          setTimeout(() => {
+            if (localStream && matchDetails?.partnerId && !isCallActive && isMatched) {
+              startVideoCall(matchDetails.partnerId, localStream, remoteVideoRef.current);
+              setIsCallActive(true);
+            }
+          }, 1000);
+        }
+      }, 2000);
     } catch (error) {
       console.error('[VideoChat] Error during connection retry:', error);
     }
@@ -295,17 +344,16 @@ const VideoChat = ({ mode }) => {
       setIsCallActive(false);
       setConnectionState('new');
       setIceConnectionState('new');
+      setRemoteStream(null);
+      setHasRemoteVideo(false);
       connectionAttemptRef.current = 0;
+      
+      if (retryTimeoutRef.current) {
+        clearTimeout(retryTimeoutRef.current);
+      }
       
       // Clean up remote video immediately
       if (remoteVideoRef.current) {
-        if (remoteVideoRef.current.srcObject) {
-          const tracks = remoteVideoRef.current.srcObject.getTracks();
-          tracks.forEach(track => {
-            track.stop();
-            console.log("[VideoChat] Stopped remote track:", track.kind);
-          });
-        }
         remoteVideoRef.current.srcObject = null;
         console.log("[VideoChat] Remote video cleared");
       }
@@ -333,7 +381,7 @@ const VideoChat = ({ mode }) => {
     }
     
     if (connectionState === 'connected' && iceConnectionState === 'connected') {
-      return "Connected";
+      return hasRemoteVideo ? "Connected" : "Connected - Waiting for video...";
     }
     
     if (connectionState === 'failed' || iceConnectionState === 'failed') {
@@ -352,32 +400,50 @@ const VideoChat = ({ mode }) => {
           {/* Remote Video */}
           <div className="flex-1 bg-black flex items-center justify-center relative rounded-md overflow-hidden min-h-0 max-h-full">
             {/* Connection Status Overlay */}
-            <div className="absolute z-10 text-white text-center left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 px-4">
-              <div className="text-lg mb-2">{getConnectionStatusText()}</div>
-              {(connectionState === 'connecting' || iceConnectionState === 'checking') && (
-                <div className="flex justify-center">
-                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div>
-                </div>
-              )}
-            </div>
+            {(!hasRemoteVideo || connectionState !== 'connected') && (
+              <div className="absolute z-10 text-white text-center left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 px-4">
+                <div className="text-lg mb-2">{getConnectionStatusText()}</div>
+                {(connectionState === 'connecting' || iceConnectionState === 'checking' || isConnecting) && (
+                  <div className="flex justify-center">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div>
+                  </div>
+                )}
+              </div>
+            )}
             
             <video
               ref={remoteVideoRef}
               autoPlay
               playsInline
               muted={false}
-              className="w-full h-full object-cover max-w-full max-h-full"
+              className={`w-full h-full object-cover max-w-full max-h-full ${!hasRemoteVideo ? 'opacity-0' : 'opacity-100'}`}
               onLoadedMetadata={() => {
                 console.log("[VideoChat] Remote video metadata loaded");
+                setHasRemoteVideo(true);
                 if (remoteVideoRef.current) {
                   remoteVideoRef.current.play().catch(e => 
                     console.error("[VideoChat] Remote video play failed:", e)
                   );
                 }
               }}
-              onError={(e) => console.error("[VideoChat] Remote video error:", e)}
-              onCanPlay={() => console.log("[VideoChat] Remote video can play")}
-              onPlaying={() => console.log("[VideoChat] Remote video is playing")}
+              onError={(e) => {
+                console.error("[VideoChat] Remote video error:", e);
+                setHasRemoteVideo(false);
+              }}
+              onCanPlay={() => {
+                console.log("[VideoChat] Remote video can play");
+                setHasRemoteVideo(true);
+              }}
+              onPlaying={() => {
+                console.log("[VideoChat] Remote video is playing");
+                setHasRemoteVideo(true);
+              }}
+              onWaiting={() => {
+                console.log("[VideoChat] Remote video is waiting");
+              }}
+              onStalled={() => {
+                console.log("[VideoChat] Remote video stalled");
+              }}
             />
             
             {/* Local Video Overlay for mobile/tablet */}
