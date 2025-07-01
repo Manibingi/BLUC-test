@@ -1,3 +1,4 @@
+
 import React, { createContext, useContext, useRef, useState, useEffect } from 'react';
 import { io } from 'socket.io-client';
 import { useAuth } from './AuthContext';
@@ -17,6 +18,7 @@ export const ChatProvider = ({ children }) => {
   const connectionTimeoutRef = useRef(null);
   const isCleaningUpRef = useRef(false);
   const reconnectTimeoutRef = useRef(null);
+  const offerAnswerTimeoutRef = useRef(null);
 
   const [isConnecting, setIsConnecting] = useState(false);
   const [isMatched, setIsMatched] = useState(false);
@@ -122,7 +124,6 @@ export const ChatProvider = ({ children }) => {
       console.log("[ChatContext] Socket disconnected:", reason);
       setIsConnecting(false);
       if (reason === 'io server disconnect') {
-        // Server disconnected, try to reconnect
         socketInstance.connect();
       }
     });
@@ -148,7 +149,6 @@ export const ChatProvider = ({ children }) => {
       
       await cleanupMatch();
       
-      // Clear any existing reconnect timeout
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
       }
@@ -193,27 +193,39 @@ export const ChatProvider = ({ children }) => {
     
     if (peerConnectionRef.current) {
       console.log("[ChatContext] Closing existing peer connection");
-      peerConnectionRef.current.close();
+      try {
+        peerConnectionRef.current.close();
+      } catch (error) {
+        console.error("[ChatContext] Error closing existing peer connection:", error);
+      }
     }
 
     const pc = new RTCPeerConnection(iceServers);
     peerConnectionRef.current = pc;
     setPeerConnection(pc);
 
-    // Clear pending candidates
+    // Clear pending candidates and timeouts
     pendingCandidatesRef.current = [];
-
-    // Set up connection timeout
+    
     if (connectionTimeoutRef.current) {
       clearTimeout(connectionTimeoutRef.current);
     }
     
+    if (offerAnswerTimeoutRef.current) {
+      clearTimeout(offerAnswerTimeoutRef.current);
+    }
+    
+    // Set up connection timeout
     connectionTimeoutRef.current = setTimeout(() => {
-      if (pc.connectionState !== 'connected') {
+      if (pc.connectionState !== 'connected' && pc.connectionState !== 'closed') {
         console.log("[ChatContext] Connection timeout, closing peer connection");
-        pc.close();
+        try {
+          pc.close();
+        } catch (error) {
+          console.error("[ChatContext] Error closing timed out connection:", error);
+        }
       }
-    }, 30000); // 30 second timeout
+    }, 30000);
 
     // Event handlers
     pc.onicecandidate = (event) => {
@@ -236,18 +248,25 @@ export const ChatProvider = ({ children }) => {
         remoteStreamRef.current = remoteStream;
         console.log("[ChatContext] Remote stream tracks:", remoteStream.getTracks().map(t => t.kind));
         
-        // Find remote video element and set stream
+        // Directly use the remote video ref passed to startVideoCall
         const remoteVideo = document.querySelector('video[autoplay]:not([muted])');
         if (remoteVideo) {
           console.log("[ChatContext] Setting remote stream to video element");
           remoteVideo.srcObject = remoteStream;
           
-          remoteVideo.onloadedmetadata = () => {
-            console.log("[ChatContext] Remote video metadata loaded");
-            remoteVideo.play().catch(e => {
-              console.error("[ChatContext] Remote video play failed:", e);
+          // Ensure video plays
+          const playPromise = remoteVideo.play();
+          if (playPromise !== undefined) {
+            playPromise.catch(error => {
+              console.error("[ChatContext] Remote video play failed:", error);
+              // Try playing again after a short delay
+              setTimeout(() => {
+                remoteVideo.play().catch(e => 
+                  console.error("[ChatContext] Second attempt to play remote video failed:", e)
+                );
+              }, 1000);
             });
-          };
+          }
         } else {
           console.warn("[ChatContext] Remote video element not found");
         }
@@ -262,10 +281,16 @@ export const ChatProvider = ({ children }) => {
         if (connectionTimeoutRef.current) {
           clearTimeout(connectionTimeoutRef.current);
         }
+        if (offerAnswerTimeoutRef.current) {
+          clearTimeout(offerAnswerTimeoutRef.current);
+        }
       } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
         console.log("[ChatContext] Peer connection failed/disconnected");
         if (connectionTimeoutRef.current) {
           clearTimeout(connectionTimeoutRef.current);
+        }
+        if (offerAnswerTimeoutRef.current) {
+          clearTimeout(offerAnswerTimeoutRef.current);
         }
       }
     };
@@ -275,7 +300,13 @@ export const ChatProvider = ({ children }) => {
       
       if (pc.iceConnectionState === 'failed') {
         console.log("[ChatContext] ICE connection failed, restarting ICE");
-        pc.restartIce();
+        if (pc.connectionState !== 'closed') {
+          try {
+            pc.restartIce();
+          } catch (error) {
+            console.error("[ChatContext] Error restarting ICE:", error);
+          }
+        }
       }
     };
 
@@ -312,7 +343,8 @@ export const ChatProvider = ({ children }) => {
       // Add local stream tracks
       localStream.getTracks().forEach(track => {
         console.log("[ChatContext] Adding local track:", track.kind, track.label);
-        pc.addTrack(track, localStream);
+        const sender = pc.addTrack(track, localStream);
+        console.log("[ChatContext] Track added, sender:", sender);
       });
 
       // Set up socket event handlers for this call
@@ -325,6 +357,18 @@ export const ChatProvider = ({ children }) => {
       console.log("[ChatContext] Should initiate call:", shouldInitiate, "My ID:", socket.id, "Partner ID:", partnerId);
 
       if (shouldInitiate) {
+        // Set timeout for offer/answer exchange
+        offerAnswerTimeoutRef.current = setTimeout(() => {
+          console.log("[ChatContext] Offer/Answer timeout");
+          if (pc.signalingState !== 'stable') {
+            try {
+              pc.close();
+            } catch (error) {
+              console.error("[ChatContext] Error closing connection after timeout:", error);
+            }
+          }
+        }, 10000);
+
         // Create and send offer
         console.log("[ChatContext] Creating offer...");
         const offer = await pc.createOffer({
@@ -362,6 +406,22 @@ export const ChatProvider = ({ children }) => {
           await pc.setLocalDescription({ type: "rollback" });
         }
 
+        // Set timeout for answer
+        if (offerAnswerTimeoutRef.current) {
+          clearTimeout(offerAnswerTimeoutRef.current);
+        }
+        
+        offerAnswerTimeoutRef.current = setTimeout(() => {
+          console.log("[ChatContext] Answer timeout");
+          if (pc.signalingState !== 'stable') {
+            try {
+              pc.close();
+            } catch (error) {
+              console.error("[ChatContext] Error closing connection after answer timeout:", error);
+            }
+          }
+        }, 10000);
+
         await pc.setRemoteDescription(new RTCSessionDescription(offer));
         console.log("[ChatContext] Remote description set from offer");
 
@@ -374,8 +434,16 @@ export const ChatProvider = ({ children }) => {
         // Process pending ICE candidates
         await processPendingCandidates(pc);
 
+        // Clear timeout since answer was sent successfully
+        if (offerAnswerTimeoutRef.current) {
+          clearTimeout(offerAnswerTimeoutRef.current);
+        }
+
       } catch (error) {
         console.error("[ChatContext] Error handling video offer:", error);
+        if (offerAnswerTimeoutRef.current) {
+          clearTimeout(offerAnswerTimeoutRef.current);
+        }
       }
     });
 
@@ -391,11 +459,19 @@ export const ChatProvider = ({ children }) => {
 
           // Process pending ICE candidates
           await processPendingCandidates(pc);
+
+          // Clear timeout since answer was received successfully
+          if (offerAnswerTimeoutRef.current) {
+            clearTimeout(offerAnswerTimeoutRef.current);
+          }
         } else {
           console.warn("[ChatContext] Received answer in wrong state:", pc.signalingState);
         }
       } catch (error) {
         console.error("[ChatContext] Error handling video answer:", error);
+        if (offerAnswerTimeoutRef.current) {
+          clearTimeout(offerAnswerTimeoutRef.current);
+        }
       }
     });
 
@@ -427,16 +503,19 @@ export const ChatProvider = ({ children }) => {
   const processPendingCandidates = async (pc) => {
     console.log("[ChatContext] Processing", pendingCandidatesRef.current.length, "pending ICE candidates");
     
-    for (const candidate of pendingCandidatesRef.current) {
+    const candidates = [...pendingCandidatesRef.current];
+    pendingCandidatesRef.current = [];
+    
+    for (const candidate of candidates) {
       try {
-        await pc.addIceCandidate(candidate);
-        console.log("[ChatContext] Added pending ICE candidate");
+        if (pc.connectionState !== 'closed' && pc.remoteDescription) {
+          await pc.addIceCandidate(candidate);
+          console.log("[ChatContext] Added pending ICE candidate");
+        }
       } catch (error) {
         console.error("[ChatContext] Error adding pending ICE candidate:", error);
       }
     }
-    
-    pendingCandidatesRef.current = [];
   };
 
   const disconnectSocket = () => {
@@ -449,6 +528,9 @@ export const ChatProvider = ({ children }) => {
     }
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current);
+    }
+    if (offerAnswerTimeoutRef.current) {
+      clearTimeout(offerAnswerTimeoutRef.current);
     }
     
     if (socketRef.current) {
@@ -475,38 +557,52 @@ export const ChatProvider = ({ children }) => {
     if (connectionTimeoutRef.current) {
       clearTimeout(connectionTimeoutRef.current);
     }
+    if (offerAnswerTimeoutRef.current) {
+      clearTimeout(offerAnswerTimeoutRef.current);
+    }
 
     // Clean up peer connection
     if (peerConnectionRef.current) {
       console.log("[ChatContext] Closing peer connection...");
       
-      // Remove event listeners
-      peerConnectionRef.current.onicecandidate = null;
-      peerConnectionRef.current.ontrack = null;
-      peerConnectionRef.current.onconnectionstatechange = null;
-      peerConnectionRef.current.oniceconnectionstatechange = null;
+      try {
+        // Remove event listeners
+        peerConnectionRef.current.onicecandidate = null;
+        peerConnectionRef.current.ontrack = null;
+        peerConnectionRef.current.onconnectionstatechange = null;
+        peerConnectionRef.current.oniceconnectionstatechange = null;
+        
+        // Stop all tracks
+        peerConnectionRef.current.getReceivers().forEach(receiver => {
+          if (receiver.track) {
+            receiver.track.stop();
+          }
+        });
+        
+        peerConnectionRef.current.getSenders().forEach(sender => {
+          if (sender.track) {
+            sender.track.stop();
+          }
+        });
+        
+        peerConnectionRef.current.close();
+      } catch (error) {
+        console.error("[ChatContext] Error during peer connection cleanup:", error);
+      }
       
-      // Stop all tracks
-      peerConnectionRef.current.getReceivers().forEach(receiver => {
-        if (receiver.track) {
-          receiver.track.stop();
-        }
-      });
-      
-      peerConnectionRef.current.getSenders().forEach(sender => {
-        if (sender.track) {
-          sender.track.stop();
-        }
-      });
-      
-      peerConnectionRef.current.close();
       peerConnectionRef.current = null;
       setPeerConnection(null);
     }
 
     // Clean up streams
     if (remoteStreamRef.current) {
-      remoteStreamRef.current.getTracks().forEach(track => track.stop());
+      remoteStreamRef.current.getTracks().forEach(track => {
+        try {
+          track.stop();
+        } catch (error) {
+          console.error("[ChatContext] Error stopping remote track:", error);
+        }
+      });
       remoteStreamRef.current = null;
     }
 

@@ -1,11 +1,12 @@
+
 const textwaitingUsers = new Map();
 const videowaitingUsers = new Map();
 const activePairs = new Map();
 const activeVideoCalls = new Set();
-const userSockets = new Map(); // Track user socket mappings
+const userSockets = new Map();
 
 const SOCKET_RETENTION_TIME = 3 * 60 * 1000;
-const MATCH_TIMEOUT = 30000; // 30 seconds timeout for matching
+const MATCH_TIMEOUT = 30000;
 
 const waitingUsersMap = {
   video: videowaitingUsers,
@@ -17,6 +18,15 @@ export default (io, socket) => {
   
   // Store socket reference
   userSockets.set(socket.id, socket);
+
+  // Set up heartbeat
+  const heartbeatInterval = setInterval(() => {
+    if (socket.connected) {
+      socket.emit('ping');
+    } else {
+      clearInterval(heartbeatInterval);
+    }
+  }, 30000);
 
   socket.on('user-details', ({ gender, interest, name, mode, selectedGender }) => {
     try {
@@ -60,13 +70,18 @@ export default (io, socket) => {
         console.log(`[Socket] User ${socket.id} added to ${mode} waiting list. Total waiting: ${waitingUsers.size}`);
         
         // Set timeout for waiting users
-        setTimeout(() => {
+        const timeoutId = setTimeout(() => {
           if (waitingUsers.has(socket.id)) {
             console.log(`[Socket] Timeout for user ${socket.id}, removing from waiting list`);
             waitingUsers.delete(socket.id);
-            socket.emit('match-timeout', { message: 'No match found, please try again' });
+            if (socket.connected) {
+              socket.emit('match-timeout', { message: 'No match found, please try again' });
+            }
           }
         }, MATCH_TIMEOUT);
+
+        // Store timeout ID for cleanup
+        socket.matchTimeout = timeoutId;
       }
     } catch (error) {
       console.error(`[Socket] Error in user-details for ${socket.id}:`, error);
@@ -76,11 +91,17 @@ export default (io, socket) => {
 
   socket.on('send-message', (message, toSocketId) => {
     try {
-      console.log(`[Message] From ${socket.id} to ${toSocketId}: ${message}`);
+      console.log(`[Message] From ${socket.id} to ${toSocketId}: ${message?.substring(0, 50)}...`);
       
       // Validate message
       if (!message || typeof message !== 'string' || message.trim().length === 0) {
         console.log(`[Message] Invalid message from ${socket.id}`);
+        return;
+      }
+      
+      if (message.length > 1000) {
+        console.log(`[Message] Message too long from ${socket.id}`);
+        socket.emit('error', { message: 'Message too long' });
         return;
       }
       
@@ -98,6 +119,7 @@ export default (io, socket) => {
       } else {
         console.log(`[Message] Target ${toSocketId} not found or disconnected`);
         socket.emit('partner-disconnected', 'Your partner has disconnected');
+        cleanupUserConnections(socket.id);
       }
     } catch (error) {
       console.error(`[Socket] Error in send-message:`, error);
@@ -164,6 +186,15 @@ export default (io, socket) => {
   socket.on('disconnect', (reason) => {
     try {
       console.log(`[Socket] User ${socket.id} disconnected: ${reason}`);
+      
+      // Clear heartbeat
+      clearInterval(heartbeatInterval);
+      
+      // Clear match timeout if exists
+      if (socket.matchTimeout) {
+        clearTimeout(socket.matchTimeout);
+      }
+      
       cleanupUserConnections(socket.id);
       userSockets.delete(socket.id);
     } catch (error) {
@@ -171,10 +202,16 @@ export default (io, socket) => {
     }
   });
 
-  // Enhanced video call signaling events
+  // Enhanced video call signaling events with better validation
   socket.on("video-offer", (offer, toSocketId) => {
     try {
       console.log(`[Video] Offer from ${socket.id} to ${toSocketId}`);
+      
+      // Validate offer
+      if (!offer || !offer.type || !offer.sdp) {
+        console.log(`[Video] Invalid offer from ${socket.id}`);
+        return;
+      }
       
       // Validate that users are paired
       const partnerId = activePairs.get(socket.id);
@@ -191,6 +228,7 @@ export default (io, socket) => {
       } else {
         console.log(`[Video] Target ${toSocketId} not found for offer`);
         socket.emit('partner-disconnected', 'Your partner has disconnected');
+        cleanupUserConnections(socket.id);
       }
     } catch (error) {
       console.error(`[Socket] Error in video-offer:`, error);
@@ -200,6 +238,12 @@ export default (io, socket) => {
   socket.on("video-answer", (answer, toSocketId) => {
     try {
       console.log(`[Video] Answer from ${socket.id} to ${toSocketId}`);
+      
+      // Validate answer
+      if (!answer || !answer.type || !answer.sdp) {
+        console.log(`[Video] Invalid answer from ${socket.id}`);
+        return;
+      }
       
       // Validate that users are paired
       const partnerId = activePairs.get(socket.id);
@@ -215,6 +259,7 @@ export default (io, socket) => {
       } else {
         console.log(`[Video] Target ${toSocketId} not found for answer`);
         socket.emit('partner-disconnected', 'Your partner has disconnected');
+        cleanupUserConnections(socket.id);
       }
     } catch (error) {
       console.error(`[Socket] Error in video-answer:`, error);
@@ -223,6 +268,11 @@ export default (io, socket) => {
 
   socket.on("ice-candidate", (candidate, toSocketId) => {
     try {
+      if (!candidate) {
+        console.log(`[ICE] Empty candidate from ${socket.id}`);
+        return;
+      }
+      
       console.log(`[ICE] Candidate from ${socket.id} to ${toSocketId} (type: ${candidate.type || 'unknown'})`);
       
       // Validate that users are paired
@@ -239,6 +289,7 @@ export default (io, socket) => {
       } else {
         console.log(`[ICE] Target ${toSocketId} not found for ICE candidate`);
         socket.emit('partner-disconnected', 'Your partner has disconnected');
+        cleanupUserConnections(socket.id);
       }
     } catch (error) {
       console.error(`[Socket] Error in ice-candidate:`, error);
@@ -265,9 +316,9 @@ export default (io, socket) => {
     }
   });
 
-  // Heartbeat mechanism
-  socket.on('ping', () => {
-    socket.emit('pong');
+  // Heartbeat response
+  socket.on('pong', () => {
+    console.log(`[Heartbeat] Pong from ${socket.id}`);
   });
 
   // ------------------ Helper Functions ------------------
@@ -340,6 +391,16 @@ export default (io, socket) => {
     try {
       const waitingUsers = waitingUsersMap[mode];
       waitingUsers.delete(socketB.id);
+
+      // Clear match timeouts
+      if (socketA.matchTimeout) {
+        clearTimeout(socketA.matchTimeout);
+        socketA.matchTimeout = null;
+      }
+      if (socketB.matchTimeout) {
+        clearTimeout(socketB.matchTimeout);
+        socketB.matchTimeout = null;
+      }
 
       console.log(`[Connect] Connecting ${socketA.id} and ${socketB.id} in ${mode} mode`);
 
@@ -434,30 +495,56 @@ export default (io, socket) => {
     }
   }
 
-  // Periodic cleanup of stale connections
+  // Enhanced periodic cleanup
   setInterval(() => {
-    const now = Date.now();
-    
-    // Clean up stale waiting users
-    [videowaitingUsers, textwaitingUsers].forEach(waitingUsers => {
-      for (let [id, socket] of waitingUsers) {
-        if (!socket.connected || !socket.data || (now - socket.data.joinTime) > SOCKET_RETENTION_TIME) {
-          console.log(`[Cleanup] Removing stale waiting user: ${id}`);
-          waitingUsers.delete(id);
+    try {
+      const now = Date.now();
+      
+      // Clean up stale waiting users
+      [videowaitingUsers, textwaitingUsers].forEach((waitingUsers, index) => {
+        const mode = index === 0 ? 'video' : 'text';
+        for (let [id, socket] of waitingUsers) {
+          if (!socket.connected || !socket.data || (now - socket.data.joinTime) > SOCKET_RETENTION_TIME) {
+            console.log(`[Cleanup] Removing stale waiting user: ${id} from ${mode}`);
+            waitingUsers.delete(id);
+            if (socket.matchTimeout) {
+              clearTimeout(socket.matchTimeout);
+            }
+          }
+        }
+      });
+      
+      // Clean up stale active pairs
+      for (let [userId, partnerId] of activePairs) {
+        const userSocket = userSockets.get(userId) || io.sockets.sockets.get(userId);
+        const partnerSocket = userSockets.get(partnerId) || io.sockets.sockets.get(partnerId);
+        
+        if (!userSocket || !userSocket.connected || !partnerSocket || !partnerSocket.connected) {
+          console.log(`[Cleanup] Removing stale active pair: ${userId} <-> ${partnerId}`);
+          activePairs.delete(userId);
+          activePairs.delete(partnerId);
         }
       }
-    });
-    
-    // Clean up stale active pairs
-    for (let [userId, partnerId] of activePairs) {
-      const userSocket = userSockets.get(userId) || io.sockets.sockets.get(userId);
-      const partnerSocket = userSockets.get(partnerId) || io.sockets.sockets.get(partnerId);
       
-      if (!userSocket || !userSocket.connected || !partnerSocket || !partnerSocket.connected) {
-        console.log(`[Cleanup] Removing stale active pair: ${userId} <-> ${partnerId}`);
-        activePairs.delete(userId);
-        activePairs.delete(partnerId);
+      // Clean up stale video calls
+      const staleVideoCalls = [];
+      for (const callId of activeVideoCalls) {
+        const [userId, partnerId] = callId.split('-');
+        const userSocket = userSockets.get(userId) || io.sockets.sockets.get(userId);
+        const partnerSocket = userSockets.get(partnerId) || io.sockets.sockets.get(partnerId);
+        
+        if (!userSocket || !userSocket.connected || !partnerSocket || !partnerSocket.connected) {
+          staleVideoCalls.push(callId);
+        }
       }
+      
+      staleVideoCalls.forEach(callId => {
+        activeVideoCalls.delete(callId);
+        console.log(`[Cleanup] Removed stale video call: ${callId}`);
+      });
+      
+    } catch (error) {
+      console.error(`[Cleanup] Error during periodic cleanup:`, error);
     }
   }, 30000); // Run every 30 seconds
 };
