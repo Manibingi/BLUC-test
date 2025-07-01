@@ -1,4 +1,3 @@
-
 import React, { createContext, useContext, useRef, useState, useEffect } from 'react';
 import { io } from 'socket.io-client';
 import { useAuth } from './AuthContext';
@@ -146,14 +145,14 @@ export const ChatProvider = ({ children }) => {
     socketInstance.on('find other', async () => {
       console.log("[ChatContext] Received 'find other' event");
       if (isCleaningUpRef.current) return;
-      
+
       // Keep local stream when finding other match
       await cleanupMatch(true);
-      
+
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
       }
-      
+
       reconnectTimeoutRef.current = setTimeout(() => {
         if (socketInstance.connected && user) {
           setIsConnecting(true);
@@ -191,7 +190,7 @@ export const ChatProvider = ({ children }) => {
 
   const createPeerConnection = () => {
     console.log("[ChatContext] Creating new peer connection");
-    
+
     if (peerConnectionRef.current) {
       console.log("[ChatContext] Closing existing peer connection");
       try {
@@ -207,15 +206,15 @@ export const ChatProvider = ({ children }) => {
 
     // Clear pending candidates and timeouts
     pendingCandidatesRef.current = [];
-    
+
     if (connectionTimeoutRef.current) {
       clearTimeout(connectionTimeoutRef.current);
     }
-    
+
     if (offerAnswerTimeoutRef.current) {
       clearTimeout(offerAnswerTimeoutRef.current);
     }
-    
+
     // Set up connection timeout
     connectionTimeoutRef.current = setTimeout(() => {
       if (pc.connectionState !== 'connected' && pc.connectionState !== 'closed') {
@@ -243,18 +242,18 @@ export const ChatProvider = ({ children }) => {
     pc.ontrack = (event) => {
       console.log("[ChatContext] Received remote track:", event.track.kind);
       console.log("[ChatContext] Remote streams:", event.streams.length);
-      
+
       if (event.streams && event.streams[0]) {
         const remoteStream = event.streams[0];
         remoteStreamRef.current = remoteStream;
         console.log("[ChatContext] Remote stream tracks:", remoteStream.getTracks().map(t => t.kind));
-        
+
         // Directly use the remote video ref passed to startVideoCall
         const remoteVideo = document.querySelector('video[autoplay]:not([muted])');
         if (remoteVideo) {
           console.log("[ChatContext] Setting remote stream to video element");
           remoteVideo.srcObject = remoteStream;
-          
+
           // Ensure video plays
           const playPromise = remoteVideo.play();
           if (playPromise !== undefined) {
@@ -276,7 +275,7 @@ export const ChatProvider = ({ children }) => {
 
     pc.onconnectionstatechange = () => {
       console.log("[ChatContext] Connection state:", pc.connectionState);
-      
+
       if (pc.connectionState === 'connected') {
         console.log("[ChatContext] Peer connection established successfully");
         if (connectionTimeoutRef.current) {
@@ -298,7 +297,7 @@ export const ChatProvider = ({ children }) => {
 
     pc.oniceconnectionstatechange = () => {
       console.log("[ChatContext] ICE connection state:", pc.iceConnectionState);
-      
+
       if (pc.iceConnectionState === 'failed') {
         console.log("[ChatContext] ICE connection failed, restarting ICE");
         if (pc.connectionState !== 'closed') {
@@ -354,7 +353,7 @@ export const ChatProvider = ({ children }) => {
       // Determine who initiates the call (lower socket ID initiates)
       const shouldInitiate = socket.id < partnerId;
       isInitiatorRef.current = shouldInitiate;
-      
+
       console.log("[ChatContext] Should initiate call:", shouldInitiate, "My ID:", socket.id, "Partner ID:", partnerId);
 
       if (shouldInitiate) {
@@ -376,10 +375,10 @@ export const ChatProvider = ({ children }) => {
           offerToReceiveAudio: true,
           offerToReceiveVideo: true
         });
-        
+
         await pc.setLocalDescription(offer);
         console.log("[ChatContext] Local description set, sending offer");
-        
+
         socket.emit("video-offer", offer, partnerId);
       }
 
@@ -411,7 +410,7 @@ export const ChatProvider = ({ children }) => {
         if (offerAnswerTimeoutRef.current) {
           clearTimeout(offerAnswerTimeoutRef.current);
         }
-        
+
         offerAnswerTimeoutRef.current = setTimeout(() => {
           console.log("[ChatContext] Answer timeout");
           if (pc.signalingState !== 'stable') {
@@ -481,7 +480,7 @@ export const ChatProvider = ({ children }) => {
       try {
         console.log("[ChatContext] Received ICE candidate:", candidate.type);
         const iceCandidate = new RTCIceCandidate(candidate);
-        
+
         if (pc.remoteDescription && pc.remoteDescription.type) {
           await pc.addIceCandidate(iceCandidate);
           console.log("[ChatContext] ICE candidate added successfully");
@@ -503,10 +502,10 @@ export const ChatProvider = ({ children }) => {
 
   const processPendingCandidates = async (pc) => {
     console.log("[ChatContext] Processing", pendingCandidatesRef.current.length, "pending ICE candidates");
-    
+
     const candidates = [...pendingCandidatesRef.current];
     pendingCandidatesRef.current = [];
-    
+
     for (const candidate of candidates) {
       try {
         if (pc.connectionState !== 'closed' && pc.remoteDescription) {
@@ -522,7 +521,7 @@ export const ChatProvider = ({ children }) => {
   const disconnectSocket = () => {
     console.log("[ChatContext] Disconnecting socket...");
     isCleaningUpRef.current = true;
-    
+
     // Clear timeouts
     if (connectionTimeoutRef.current) {
       clearTimeout(connectionTimeoutRef.current);
@@ -533,17 +532,17 @@ export const ChatProvider = ({ children }) => {
     if (offerAnswerTimeoutRef.current) {
       clearTimeout(offerAnswerTimeoutRef.current);
     }
-    
+
     if (socketRef.current) {
       socketRef.current.removeAllListeners();
       socketRef.current.disconnect();
       socketRef.current = null;
       window.socket = null;
     }
-    
+
     // Stop local stream when disconnecting completely
     cleanupMatch(false);
-    
+
     // Also stop the local stream reference
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach(track => {
@@ -555,16 +554,16 @@ export const ChatProvider = ({ children }) => {
       });
       localStreamRef.current = null;
     }
-    
+
     isCleaningUpRef.current = false;
   };
 
   const cleanupMatch = async (keepLocalStream = false) => {
     if (isCleaningUpRef.current) return;
     isCleaningUpRef.current = true;
-    
+
     console.log("[ChatContext] Cleaning up match and peer connection...");
-    
+
     setIsMatched(false);
     setMatchDetails(null);
 
@@ -579,21 +578,21 @@ export const ChatProvider = ({ children }) => {
     // Clean up peer connection
     if (peerConnectionRef.current) {
       console.log("[ChatContext] Closing peer connection...");
-      
+
       try {
         // Remove event listeners
         peerConnectionRef.current.onicecandidate = null;
         peerConnectionRef.current.ontrack = null;
         peerConnectionRef.current.onconnectionstatechange = null;
         peerConnectionRef.current.oniceconnectionstatechange = null;
-        
+
         // Stop only remote tracks from peer connection
         peerConnectionRef.current.getReceivers().forEach(receiver => {
           if (receiver.track) {
             receiver.track.stop();
           }
         });
-        
+
         // Only stop local tracks if we're not keeping the local stream
         if (!keepLocalStream) {
           peerConnectionRef.current.getSenders().forEach(sender => {
@@ -602,12 +601,12 @@ export const ChatProvider = ({ children }) => {
             }
           });
         }
-        
+
         peerConnectionRef.current.close();
       } catch (error) {
         console.error("[ChatContext] Error during peer connection cleanup:", error);
       }
-      
+
       peerConnectionRef.current = null;
       setPeerConnection(null);
     }
@@ -627,7 +626,7 @@ export const ChatProvider = ({ children }) => {
     // Clear pending candidates
     pendingCandidatesRef.current = [];
     isInitiatorRef.current = false;
-    
+
     // Remove socket event listeners for video calls
     const socket = socketRef.current;
     if (socket) {
@@ -636,7 +635,20 @@ export const ChatProvider = ({ children }) => {
       socket.off("ice-candidate");
       socket.off("end-video");
     }
-    
+
+    // Only clean up local stream if explicitly requested
+    if (localStreamRef.current && !keepLocalStream) {
+      console.log("[ChatContext] Stopping local stream tracks");
+      localStreamRef.current.getTracks().forEach(track => {
+        try {
+          track.stop();
+        } catch (error) {
+          console.error("[ChatContext] Error stopping local track:", error);
+        }
+      });
+      localStreamRef.current = null;
+    }
+
     isCleaningUpRef.current = false;
   };
 
