@@ -5,6 +5,7 @@ import { Send, X, SkipForward } from 'lucide-react';
 const TextChat = ({ partnerId, embedded = false, mode = "text", onClose }) => {
   const [message, setMessage] = useState('');
   const [messages, setMessages] = useState([]);
+  const [isSkipping, setIsSkipping] = useState(false);
   const messagesEndRef = useRef(null);
   const { sendMessage, disconnectFromMatch, next, isMatched } = useChat();
   
@@ -51,16 +52,31 @@ const TextChat = ({ partnerId, embedded = false, mode = "text", onClose }) => {
       }]);
     };
 
+    const handleFindOther = () => {
+      console.log("[TextChat] Finding other partner, clearing messages");
+      setMessages([]);
+      setIsSkipping(false);
+    };
+
     if (window.socket) {
       window.socket.on('disconect', handleDisconnect);
+      window.socket.on('find other', handleFindOther);
     }
 
     return () => {
       if (window.socket) {
         window.socket.off('disconect', handleDisconnect);
+        window.socket.off('find other', handleFindOther);
       }
     };
   }, []);
+
+  // Clear messages when partner changes
+  useEffect(() => {
+    if (!partnerId) {
+      setMessages([]);
+    }
+  }, [partnerId]);
   
   // Auto scroll to bottom when new messages arrive
   useEffect(() => {
@@ -72,7 +88,7 @@ const TextChat = ({ partnerId, embedded = false, mode = "text", onClose }) => {
   };
   
   const handleSendMessage = () => {
-    if (message.trim() && partnerId) {
+    if (message.trim() && partnerId && !isSkipping) {
       // Send the message
       sendMessage(message.trim(), partnerId);
       
@@ -92,10 +108,26 @@ const TextChat = ({ partnerId, embedded = false, mode = "text", onClose }) => {
     }
   };
   
-  const handleSkip = () => {
+  const handleSkip = async () => {
+    if (isSkipping) {
+      console.log("[TextChat] Skip already in progress");
+      return;
+    }
+
     console.log("[TextChat] Skipping to next partner");
-    setMessages([]); // Clear messages when skipping
-    next(mode);
+    setIsSkipping(true);
+    
+    try {
+      setMessages([]); // Clear messages when skipping
+      await next(mode);
+    } catch (error) {
+      console.error("[TextChat] Error during skip:", error);
+    } finally {
+      // Reset skipping state after a delay
+      setTimeout(() => {
+        setIsSkipping(false);
+      }, 2000);
+    }
   };
   
   return (
@@ -110,7 +142,8 @@ const TextChat = ({ partnerId, embedded = false, mode = "text", onClose }) => {
         <div className="flex items-center gap-2">
           <button 
             onClick={handleSkip}
-            className="text-gray-500 hover:text-gray-800 p-2"
+            disabled={isSkipping}
+            className="text-gray-500 hover:text-gray-800 p-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             title="Skip to next stranger"
           >
             <SkipForward size={18} />
@@ -119,7 +152,7 @@ const TextChat = ({ partnerId, embedded = false, mode = "text", onClose }) => {
           {embedded && onClose && (
             <button 
               onClick={onClose}
-              className="text-gray-500 hover:text-gray-800 p-2"
+              className="text-gray-500 hover:text-gray-800 p-2 transition-colors"
             >
               <X size={18} />
             </button>
@@ -173,11 +206,11 @@ const TextChat = ({ partnerId, embedded = false, mode = "text", onClose }) => {
             onKeyPress={handleKeyPress}
             placeholder="Type a message..."
             className="flex-1 py-2 px-3 border border-gray-300 rounded-l-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-            disabled={!partnerId}
+            disabled={!partnerId || isSkipping}
           />
           <button
             onClick={handleSendMessage}
-            disabled={!message.trim() || !partnerId}
+            disabled={!message.trim() || !partnerId || isSkipping}
             className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white py-2 px-4 rounded-r-lg transition-colors"
           >
             <Send size={18} />
