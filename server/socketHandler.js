@@ -12,12 +12,12 @@ const waitingUsersMap = {
 };
 
 export default (io, socket) => {
-  console.log(`[SocketHandler] User connected: ${socket.id}`);
+  console.log(`[Socket] User connected: ${socket.id}`);
 
   socket.on('user-details', ({ gender, interest, name, mode, selectedGender }) => {
     try {
       socket.data = { gender, interest, selectedGender, name, mode };
-      console.log(`[SocketHandler] User ${socket.id} joined with:`, {
+      console.log(`[Socket] User ${socket.id} joined with:`, {
         gender,
         interest,
         selectedGender,
@@ -30,42 +30,42 @@ export default (io, socket) => {
 
       const waitingUsers = waitingUsersMap[mode];
       if (!waitingUsers) {
-        console.error(`[SocketHandler] Invalid mode: ${mode}`);
+        console.error(`[Socket] Invalid mode: ${mode}`);
         return;
       }
 
       const matchedSocket = findBestMatch(socket, waitingUsers);
 
       if (matchedSocket) {
-        console.log(`[SocketHandler] Match found: ${socket.id} <-> ${matchedSocket.id}`);
+        console.log(`[Socket] Match found: ${socket.id} <-> ${matchedSocket.id}`);
         connectUsers(socket, matchedSocket, mode);
       } else {
         waitingUsers.set(socket.id, socket);
-        console.log(`[SocketHandler] User ${socket.id} added to ${mode} waiting list. Total waiting: ${waitingUsers.size}`);
+        console.log(`[Socket] User ${socket.id} added to ${mode} waiting list. Total waiting: ${waitingUsers.size}`);
       }
     } catch (error) {
-      console.error(`[SocketHandler] Error in user-details for ${socket.id}:`, error);
+      console.error(`[Socket] Error in user-details for ${socket.id}:`, error);
     }
   });
 
   socket.on('send-message', (message, toSocketId) => {
     try {
-      console.log(`[SocketHandler] Message from ${socket.id} to ${toSocketId}: ${message}`);
+      console.log(`[Message] From ${socket.id} to ${toSocketId}: ${message}`);
       const target = io.sockets.sockets.get(toSocketId);
       if (target) {
         target.emit('receive-message', message);
-        console.log(`[SocketHandler] Message delivered to ${toSocketId}`);
+        console.log(`[Message] Delivered to ${toSocketId}`);
       } else {
-        console.log(`[SocketHandler] Target ${toSocketId} not found`);
+        console.log(`[Message] Target ${toSocketId} not found`);
       }
     } catch (error) {
-      console.error(`[SocketHandler] Error in send-message:`, error);
+      console.error(`[Socket] Error in send-message:`, error);
     }
   });
 
   socket.on('disconnect-chat', (partnerSocketId, mode) => {
     try {
-      console.log(`[SocketHandler] ${socket.id} disconnecting from ${partnerSocketId} in ${mode} mode`);
+      console.log(`[Disconnect] ${socket.id} disconnecting from ${partnerSocketId} in ${mode} mode`);
       const partnerSocket = io.sockets.sockets.get(partnerSocketId);
 
       if (mode === "video") {
@@ -85,13 +85,13 @@ export default (io, socket) => {
       activePairs.delete(socket.id);
       activePairs.delete(partnerSocketId);
     } catch (error) {
-      console.error(`[SocketHandler] Error in disconnect-chat:`, error);
+      console.error(`[Socket] Error in disconnect-chat:`, error);
     }
   });
 
   socket.on('next', (partnerSocketId, mode) => {
     try {
-      console.log(`[SocketHandler] ${socket.id} skipping partner ${partnerSocketId} in ${mode} mode`);
+      console.log(`[Next] ${socket.id} skipping partner ${partnerSocketId} in ${mode} mode`);
       
       const partnerSocket = io.sockets.sockets.get(partnerSocketId);
       
@@ -105,86 +105,76 @@ export default (io, socket) => {
       
       // Notify both users to find new partners
       if (partnerSocket) {
-        console.log(`[SocketHandler] Notifying partner ${partnerSocketId} to find other`);
+        console.log(`[Next] Notifying partner ${partnerSocketId} to find other`);
         partnerSocket.emit("find other");
       }
       
-      console.log(`[SocketHandler] Notifying current user ${socket.id} to find other`);
+      console.log(`[Next] Notifying current user ${socket.id} to find other`);
       socket.emit("find other");
     } catch (error) {
-      console.error(`[SocketHandler] Error in next:`, error);
+      console.error(`[Socket] Error in next:`, error);
     }
   });
 
   socket.on('disconnect', (reason) => {
     try {
-      console.log(`[SocketHandler] User ${socket.id} disconnected: ${reason}`);
+      console.log(`[Socket] User ${socket.id} disconnected: ${reason}`);
       cleanupUserConnections(socket.id);
     } catch (error) {
-      console.error(`[SocketHandler] Error in disconnect:`, error);
+      console.error(`[Socket] Error in disconnect:`, error);
     }
   });
 
-  // Video call signaling events with improved error handling
+  // Video call signaling events
   socket.on("video-offer", (offer, toSocketId) => {
     try {
-      console.log(`[SocketHandler] Video offer from ${socket.id} to ${toSocketId}`);
-      console.log(`[SocketHandler] Offer type: ${offer.type}, SDP length: ${offer.sdp ? offer.sdp.length : 'N/A'}`);
-      
+      console.log(`[Video] Offer from ${socket.id} to ${toSocketId}`);
       const target = io.sockets.sockets.get(toSocketId);
       if (target) {
         target.emit("video-offer", offer, socket.id);
         activeVideoCalls.add(`${socket.id}-${toSocketId}`);
-        console.log(`[SocketHandler] Video offer delivered to ${toSocketId}`);
+        console.log(`[Video] Offer delivered to ${toSocketId}`);
       } else {
-        console.log(`[SocketHandler] Target ${toSocketId} not found for offer`);
-        socket.emit("error", { message: "Target user not found" });
+        console.log(`[Video] Target ${toSocketId} not found for offer`);
       }
     } catch (error) {
-      console.error(`[SocketHandler] Error in video-offer:`, error);
-      socket.emit("error", { message: "Failed to process video offer" });
+      console.error(`[Socket] Error in video-offer:`, error);
     }
   });
 
   socket.on("video-answer", (answer, toSocketId) => {
     try {
-      console.log(`[SocketHandler] Video answer from ${socket.id} to ${toSocketId}`);
-      console.log(`[SocketHandler] Answer type: ${answer.type}, SDP length: ${answer.sdp ? answer.sdp.length : 'N/A'}`);
-      
+      console.log(`[Video] Answer from ${socket.id} to ${toSocketId}`);
       const target = io.sockets.sockets.get(toSocketId);
       if (target) {
         target.emit("video-answer", answer);
-        console.log(`[SocketHandler] Video answer delivered to ${toSocketId}`);
+        console.log(`[Video] Answer delivered to ${toSocketId}`);
       } else {
-        console.log(`[SocketHandler] Target ${toSocketId} not found for answer`);
-        socket.emit("error", { message: "Target user not found" });
+        console.log(`[Video] Target ${toSocketId} not found for answer`);
       }
     } catch (error) {
-      console.error(`[SocketHandler] Error in video-answer:`, error);
-      socket.emit("error", { message: "Failed to process video answer" });
+      console.error(`[Socket] Error in video-answer:`, error);
     }
   });
 
   socket.on("ice-candidate", (candidate, toSocketId) => {
     try {
-      console.log(`[SocketHandler] ICE candidate from ${socket.id} to ${toSocketId}`);
-      console.log(`[SocketHandler] Candidate type: ${candidate.type || 'unknown'}`);
-      
+      console.log(`[ICE] Candidate from ${socket.id} to ${toSocketId}`);
       const target = io.sockets.sockets.get(toSocketId);
       if (target) {
         target.emit("ice-candidate", candidate);
-        console.log(`[SocketHandler] ICE candidate delivered to ${toSocketId}`);
+        console.log(`[ICE] Candidate delivered to ${toSocketId}`);
       } else {
-        console.log(`[SocketHandler] Target ${toSocketId} not found for ICE candidate`);
+        console.log(`[ICE] Target ${toSocketId} not found for ICE candidate`);
       }
     } catch (error) {
-      console.error(`[SocketHandler] Error in ice-candidate:`, error);
+      console.error(`[Socket] Error in ice-candidate:`, error);
     }
   });
 
   socket.on("end-call", (partnerId) => {
     try {
-      console.log(`[SocketHandler] End call from ${socket.id} to ${partnerId}`);
+      console.log(`[Video] End call from ${socket.id} to ${partnerId}`);
       videowaitingUsers.delete(socket.id);
       const partnerSocket = io.sockets.sockets.get(partnerId);
       if (partnerSocket) {
@@ -193,19 +183,14 @@ export default (io, socket) => {
       }
       handleVideoCallEnd(socket.id, partnerId);
     } catch (error) {
-      console.error(`[SocketHandler] Error in end-call:`, error);
+      console.error(`[Socket] Error in end-call:`, error);
     }
-  });
-
-  // Error handling
-  socket.on("error", (error) => {
-    console.error(`[SocketHandler] Socket error for ${socket.id}:`, error);
   });
 
   // ------------------ Helper Functions ------------------
 
   function findBestMatch(socket, waitingUsers) {
-    console.log(`[SocketHandler] Finding match for ${socket.id} with data:`, socket.data);
+    console.log(`[Match] Finding match for ${socket.id} with data:`, socket.data);
     let fallbackSocket = null;
     let bestMatch = null;
 
@@ -217,7 +202,7 @@ export default (io, socket) => {
         socket.data.selectedGender === "random" ||
         otherSocket.data?.gender === socket.data.selectedGender;
 
-      console.log(`[SocketHandler] Checking ${id}: interests=${interestsMatch}, gender=${genderMatches}`);
+      console.log(`[Match] Checking ${id}: interests=${interestsMatch}, gender=${genderMatches}`);
 
       // Perfect match: both interests and gender match
       if (interestsMatch && genderMatches) {
@@ -240,9 +225,9 @@ export default (io, socket) => {
 
     const selectedMatch = bestMatch || fallbackSocket;
     if (selectedMatch) {
-      console.log(`[SocketHandler] Selected match ${selectedMatch.id} for ${socket.id}`);
+      console.log(`[Match] Selected match ${selectedMatch.id} for ${socket.id}`);
     } else {
-      console.log(`[SocketHandler] No match found for ${socket.id}`);
+      console.log(`[Match] No match found for ${socket.id}`);
     }
 
     return selectedMatch;
@@ -253,7 +238,7 @@ export default (io, socket) => {
       const waitingUsers = waitingUsersMap[mode];
       waitingUsers.delete(socketB.id);
 
-      console.log(`[SocketHandler] Connecting ${socketA.id} and ${socketB.id} in ${mode} mode`);
+      console.log(`[Connect] Connecting ${socketA.id} and ${socketB.id} in ${mode} mode`);
 
       socketA.emit("match-found", { matched: true, socketId: socketB.id });
       socketB.emit("match-found", { matched: true, socketId: socketA.id });
@@ -263,18 +248,18 @@ export default (io, socket) => {
 
       if (mode === "video") {
         activeVideoCalls.add(`${socketA.id}-${socketB.id}`);
-        console.log(`[SocketHandler] Video call pair created: ${socketA.id}-${socketB.id}`);
+        console.log(`[Video] Video call pair created: ${socketA.id}-${socketB.id}`);
       }
 
-      console.log(`[SocketHandler] Successfully connected ${socketA.id} <-> ${socketB.id}`);
+      console.log(`[Connect] Successfully connected ${socketA.id} <-> ${socketB.id}`);
     } catch (error) {
-      console.error(`[SocketHandler] Error in connectUsers:`, error);
+      console.error(`[Socket] Error in connectUsers:`, error);
     }
   }
 
   function cleanupUserConnections(userId) {
     try {
-      console.log(`[SocketHandler] Cleaning up connections for user: ${userId}`);
+      console.log(`[Cleanup] Cleaning up connections for user: ${userId}`);
       
       // Remove from waiting lists
       videowaitingUsers.delete(userId);
@@ -283,10 +268,10 @@ export default (io, socket) => {
       // Handle active pair cleanup
       const partnerId = activePairs.get(userId);
       if (partnerId) {
-        console.log(`[SocketHandler] Found active partner ${partnerId} for ${userId}`);
+        console.log(`[Cleanup] Found active partner ${partnerId} for ${userId}`);
         const partnerSocket = io.sockets.sockets.get(partnerId);
         if (partnerSocket) {
-          console.log(`[SocketHandler] Notifying partner ${partnerId} about disconnection`);
+          console.log(`[Cleanup] Notifying partner ${partnerId} about disconnection`);
           partnerSocket.emit("disconect", "Partner disconnected unexpectedly.");
           partnerSocket.emit("find other");
         }
@@ -306,18 +291,18 @@ export default (io, socket) => {
       
       callsToRemove.forEach(callId => {
         activeVideoCalls.delete(callId);
-        console.log(`[SocketHandler] Removed video call: ${callId}`);
+        console.log(`[Cleanup] Removed video call: ${callId}`);
       });
 
-      console.log(`[SocketHandler] Cleanup completed for ${userId}`);
+      console.log(`[Cleanup] Cleanup completed for ${userId}`);
     } catch (error) {
-      console.error(`[SocketHandler] Error in cleanupUserConnections:`, error);
+      console.error(`[Socket] Error in cleanupUserConnections:`, error);
     }
   }
 
   function handleVideoCallEnd(userId, partnerId) {
     try {
-      console.log(`[SocketHandler] Ending video call between ${userId} and ${partnerId}`);
+      console.log(`[Video] Ending video call between ${userId} and ${partnerId}`);
       
       // Remove all possible call combinations
       const callVariations = [
@@ -328,7 +313,7 @@ export default (io, socket) => {
       callVariations.forEach(callId => {
         if (activeVideoCalls.has(callId)) {
           activeVideoCalls.delete(callId);
-          console.log(`[SocketHandler] Removed video call: ${callId}`);
+          console.log(`[Video] Removed video call: ${callId}`);
         }
       });
       
@@ -336,9 +321,9 @@ export default (io, socket) => {
       activePairs.delete(userId);
       activePairs.delete(partnerId);
       
-      console.log(`[SocketHandler] Video call cleanup completed`);
+      console.log(`[Video] Video call cleanup completed`);
     } catch (error) {
-      console.error(`[SocketHandler] Error in handleVideoCallEnd:`, error);
+      console.error(`[Socket] Error in handleVideoCallEnd:`, error);
     }
   }
 };
