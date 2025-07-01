@@ -1,5 +1,3 @@
-// ChatContext.jsx
-
 import React, { createContext, useContext, useRef, useState, useEffect } from 'react';
 import { io } from 'socket.io-client';
 import { useAuth } from './AuthContext';
@@ -20,14 +18,16 @@ export const ChatProvider = ({ children }) => {
   const callStartedRef = useRef(false);
   const pendingCandidates = useRef([]);
   const [interest, setMyInterest] = useState(null);
-  const [trialTimer, setTrialTimer] = useState(180); // 3 minutes in seconds
+  const [trialTimer, setTrialTimer] = useState(180);
   const [genderSelectionFrozen, setGenderSelectionFrozen] = useState(false);
   const [trialUsed, setTrialUsed] = useState(false);
   const [isPremium, setIsPremium] = useState(false);
+  const isCleaningUpRef = useRef(false);
 
   const iceServers = {
     iceServers: [
-      { urls: ["stun:stun.l.google.com:19302", "stun:stun.l.google.com:19302"] },
+      { urls: ["stun:stun.l.google.com:19302"] },
+      { urls: ["stun:stun1.l.google.com:19302"] },
       {
         urls: ['turn:relay1.expressturn.com:3480'],
         username: '174672462322246224',
@@ -67,116 +67,79 @@ export const ChatProvider = ({ children }) => {
   }, [user, isMatched, trialUsed]);
 
   const initializeSocket = (gender, interest, name, mode) => {
-    if (socketRef.current) return socketRef.current;
-
-    console.log("[Socket] Initializing socket connection...");
-    const socketInstance = window.socket || io(
-      import.meta.env.VITE_BACKEND_URL,
-      {
-        transports: ['websocket'],
-        withCredentials: true,
-      }
-    );
-
-    if (!window.socket) {
-      window.socket = socketInstance;
+    if (socketRef.current?.connected) {
+      console.log("[Socket] Already connected, reusing existing connection");
+      return socketRef.current;
     }
 
+    console.log("[Socket] Initializing new socket connection...");
+    const socketInstance = io(import.meta.env.VITE_BACKEND_URL, {
+      transports: ['websocket'],
+      withCredentials: true,
+      forceNew: true,
+      timeout: 20000,
+      reconnection: true,
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000
+    });
+
     socketRef.current = socketInstance;
+    window.socket = socketInstance;
 
     socketInstance.on('connect', () => {
-      console.log("[Socket] Connected:", socketInstance.id);
+      console.log("[Socket] Connected with ID:", socketInstance.id);
       const genderToSend = (user?.isPremium || (!trialUsed && trialTimer > 0)) ? selectedGender : "random";
+      console.log("[Socket] Emitting user-details:", { gender, interest, name, mode, selectedGender: genderToSend });
       socketInstance.emit('user-details', { gender, interest, name, mode, selectedGender: genderToSend });
       setIsConnecting(true);
     });
 
-    socketInstance.on('find other', () => {
-      console.log("7. In find other event");
-      console.log("[Socket] Received 'find other' event. Cleaning up and reconnecting...");
-      cleanupMatch().then(() => {
-        setIsConnecting(true);
-        console.log("11. In find other event after cleanupMatch");
-        if (user) {
-          console.log("12. In find other event calling user-details with selectedGender", selectedGender);
-          console.log("13. In find other event calling user-details with mode", mode);
-          console.log("14. In find other event calling user-details with trialUsed", trialUsed);
-          console.log("15. In find other event calling user-details with trialTimer", trialTimer);
-          console.log("16. In find other event calling user-details with isPremium", user.isPremium);
-          console.log("17. In find other event calling user-details with interest", interest);
-          console.log("18. In find other event calling user-details with name", user.name);
-          console.log("19. In find other event calling user-details")
+    socketInstance.on('connect_error', (error) => {
+      console.error("[Socket] Connection error:", error);
+      setIsConnecting(false);
+    });
+
+    socketInstance.on('disconnect', (reason) => {
+      console.log("[Socket] Disconnected:", reason);
+      setIsConnecting(false);
+      cleanupMatch();
+    });
+
+    socketInstance.on('find other', async () => {
+      console.log("[Socket] Received 'find other' event");
+      if (isCleaningUpRef.current) return;
+      
+      await cleanupMatch();
+      
+      setTimeout(() => {
+        if (socketInstance.connected && user) {
+          setIsConnecting(true);
           const genderToSend = (user.isPremium || (!trialUsed && trialTimer > 0)) ? selectedGender : "random";
+          console.log("[Socket] Re-emitting user-details after find other");
           socketInstance.emit('user-details', {
             gender: user.gender,
-            interest: user.interest,
-            name: user.name,
+            interest: interest,
+            name: user.fullName,
             mode,
             selectedGender: genderToSend
           });
         }
-      });
+      }, 500);
     });
-
-
-    // REPLACE the existing 'find other' handler with:
-    // socketInstance.on('find other', async () => {
-    //   console.log("7. In find other event");
-    //   console.log("[Socket] Received 'find other' event. Cleaning up and reconnecting...");
-
-    //   // Ensure complete cleanup before reconnecting
-    //   await cleanupMatch();
-
-    //   // Add small delay before reconnecting
-    //   setTimeout(() => {
-    //     setIsConnecting(true);
-    //     console.log("11. In find other event after cleanupMatch");
-    //     if (user) {
-    //       console.log("12. In find other event calling user-details with selectedGender", selectedGender);
-    //       const genderToSend = (user.isPremium || (!trialUsed && trialTimer > 0)) ? selectedGender : "random";
-    //       socketInstance.emit('user-details', {
-    //         gender: user.gender,
-    //         interest: user.interest,
-    //         name: user.name,
-    //         mode,
-    //         selectedGender: genderToSend
-    //       });
-    //     }
-    //   }, 200);
-    // });
 
     socketInstance.on('match-found', async (data) => {
       console.log("[Socket] Match found:", data);
-      if (data.matched) {
+      if (data.matched && data.socketId) {
         await cleanupMatch();
         setIsMatched(true);
-        console.log("hello");
         setIsConnecting(false);
         setMatchDetails({ partnerId: data.socketId });
+        console.log("[Match] Set match details:", { partnerId: data.socketId });
       }
     });
 
-    // socketInstance.on('start-call', () => {
-    //   setTimeout(() => {
-    //     console.log("[Socket] Received 'start-call'");
-    //     const remoteVideo = document.getElementById("remoteVideo");
-
-    //     const localVideo = document.getElementById("localVideo");
-    //     console.log("localVideo", localVideo);
-    //     const localStream = localVideo?.srcObject;
-
-    //     if (matchDetails?.partnerId && localStream) {
-    //       console.log("[Call] Starting video call with:", matchDetails.partnerId);
-    //       startVideoCall(matchDetails.partnerId, localStream, remoteVideo);
-    //     } else {
-    //       console.warn("[Call] Cannot start call — missing partnerId or localStream");
-    //     }
-    //   }, 200);
-    // });
-
-    socketInstance.on("cleanup", () => {
-      console.log("[Socket] Received 'cleanup' event");
-      setIsConnecting(true);
+    socketInstance.on('disconect', (message) => {
+      console.log("[Socket] Partner disconnected:", message);
       cleanupMatch();
     });
 
@@ -185,112 +148,94 @@ export const ChatProvider = ({ children }) => {
 
   const disconnectSocket = () => {
     console.log("[Socket] Disconnecting...");
+    isCleaningUpRef.current = true;
+    
     if (socketRef.current) {
+      socketRef.current.removeAllListeners();
       socketRef.current.disconnect();
       socketRef.current = null;
       window.socket = null;
     }
+    
     cleanupMatch();
+    isCleaningUpRef.current = false;
   };
 
   const cleanupMatch = async () => {
-    console.log("8. In cleanupMatch function ");
+    if (isCleaningUpRef.current) return;
+    isCleaningUpRef.current = true;
+    
     console.log("[Call] Cleaning up match and peer connection...");
+    
     setIsMatched(false);
     setMatchDetails(null);
 
+    // Clean up peer connection
     if (peerConnection) {
-      console.log("9. in cleanupMatch function peerConnection is not null", peerConnection);
       console.log("[Call] Closing peer connection...");
+      
+      // Remove all event listeners
+      peerConnection.onicecandidate = null;
+      peerConnection.ontrack = null;
+      peerConnection.onconnectionstatechange = null;
+      peerConnection.oniceconnectionstatechange = null;
+      
+      // Stop all tracks
       peerConnection.getReceivers().forEach(receiver => {
         if (receiver.track) {
           receiver.track.stop();
         }
       });
+      
+      peerConnection.getSenders().forEach(sender => {
+        if (sender.track) {
+          sender.track.stop();
+        }
+      });
+      
       peerConnection.close();
-      console.log("10. in cleanupMatch function peerConnection is set to null", peerConnection);
       setPeerConnection(null);
     }
 
-    const remoteVideo = document.getElementById("remoteVideo");
-    if (remoteVideo && remoteVideo.srcObject) {
-      remoteVideo.srcObject.getTracks().forEach(track => track.stop());
+    // Clean up remote video
+    const remoteVideo = document.querySelector('video[autoplay]:not([muted])');
+    if (remoteVideo) {
+      if (remoteVideo.srcObject) {
+        const tracks = remoteVideo.srcObject.getTracks();
+        tracks.forEach(track => track.stop());
+      }
       remoteVideo.srcObject = null;
     }
 
     callStartedRef.current = false;
     pendingCandidates.current = [];
+    
+    // Remove socket event listeners for video calls
+    const socket = socketRef.current;
+    if (socket) {
+      socket.off("video-offer");
+      socket.off("video-answer");
+      socket.off("ice-candidate");
+      socket.off("end-video");
+    }
+    
+    isCleaningUpRef.current = false;
   };
-
-  // REPLACE the existing cleanupMatch function with:
-  // const cleanupMatch = async () => {
-  //   console.log("8. In cleanupMatch function ");
-  //   console.log("[Call] Cleaning up match and peer connection...");
-
-  //   // Remove all socket event listeners first
-  //   const socket = socketRef.current;
-  //   if (socket) {
-  //     socket.off("video-offer");
-  //     socket.off("video-answer");
-  //     socket.off("ice-candidate");
-  //     socket.off("end-video");
-  //   }
-
-  //   setIsMatched(false);
-  //   setMatchDetails(null);
-
-  //   if (peerConnection) {
-  //     console.log("9. in cleanupMatch function peerConnection is not null", peerConnection);
-  //     console.log("[Call] Closing peer connection...");
-
-  //     // Stop all tracks properly
-  //     peerConnection.getReceivers().forEach(receiver => {
-  //       if (receiver.track) {
-  //         receiver.track.stop();
-  //       }
-  //     });
-
-  //     peerConnection.getSenders().forEach(sender => {
-  //       if (sender.track) {
-  //         sender.track.stop();
-  //       }
-  //     });
-
-  //     peerConnection.close();
-  //     console.log("10. in cleanupMatch function peerConnection is set to null");
-  //     setPeerConnection(null);
-  //   }
-
-  //   // Clean up remote video
-  //   const remoteVideo = document.getElementById("remoteVideo");
-  //   if (remoteVideo) {
-  //     if (remoteVideo.srcObject) {
-  //       remoteVideo.srcObject.getTracks().forEach(track => track.stop());
-  //     }
-  //     remoteVideo.srcObject = null;
-  //   }
-
-  //   callStartedRef.current = false;
-  //   pendingCandidates.current = [];
-  // };
 
   const disconnectFromMatch = (mode) => {
     const socket = socketRef.current;
     if (socket && matchDetails) {
       console.log("[Match] Disconnecting from partner:", matchDetails.partnerId);
-      cleanupMatch();
       socket.emit('disconnect-chat', matchDetails.partnerId, mode);
+      cleanupMatch();
     }
   };
 
   const next = (mode) => {
-    console.log("2 . At start of next function");
+    console.log("[Match] Skipping to next partner...");
     const socket = socketRef.current;
-    console.log("In next func socket", socket);
-    console.log("In next func match details", matchDetails);
     if (socket && matchDetails) {
-      console.log("In next func [Match] Skipping to next partner...");
-      console.log("3. In next func calling next-emit with partnerId", matchDetails.partnerId, "and mode", mode);
+      console.log("[Match] Emitting next with partnerId:", matchDetails.partnerId);
       socket.emit('next', matchDetails.partnerId, mode);
     }
   };
@@ -299,187 +244,211 @@ export const ChatProvider = ({ children }) => {
     const socket = socketRef.current;
     if (socket && partnerId) {
       console.log("[Chat] Sending message to", partnerId, ":", message);
-      window.socket.emit('send-message', message, partnerId);
+      socket.emit('send-message', message, partnerId);
     }
   };
 
   const startVideoCall = async (partnerId, localStream, remoteVideoElement) => {
-    if (!partnerId || !localStream) return;
-    const socket = socketRef.current;
-    if (!socket) return;
+    if (!partnerId || !localStream || !remoteVideoElement) {
+      console.error("[Call] Missing required parameters for video call");
+      return;
+    }
 
-    console.log("[Call] Creating new RTCPeerConnection...");
+    const socket = socketRef.current;
+    if (!socket || !socket.connected) {
+      console.error("[Call] Socket not connected");
+      return;
+    }
+
+    console.log("[Call] Starting video call with partner:", partnerId);
+
     try {
+      // Clean up existing connection
       if (peerConnection) {
-        console.log("[Call] Closing existing connection before starting new one...");
-        peerConnection.getReceivers().forEach(receiver => {
-          if (receiver.track) receiver.track.stop();
-        });
+        console.log("[Call] Cleaning up existing peer connection");
         peerConnection.close();
         setPeerConnection(null);
       }
 
+      // Create new peer connection
       const pc = new RTCPeerConnection(iceServers);
       setPeerConnection(pc);
 
-      localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+      // Add local stream tracks
+      localStream.getTracks().forEach(track => {
+        console.log("[Call] Adding local track:", track.kind);
+        pc.addTrack(track, localStream);
+      });
 
+      // Handle ICE candidates
       pc.onicecandidate = (event) => {
         if (event.candidate) {
-          console.log("[ICE] Sending ICE candidate...");
+          console.log("[ICE] Sending ICE candidate");
           socket.emit("ice-candidate", event.candidate, partnerId);
+        } else {
+          console.log("[ICE] All ICE candidates sent");
         }
       };
 
-      const remoteVideo = new MediaStream();
-      remoteVideoElement.srcObject = remoteVideo;
-      // remoteVideoElement.play().catch(() => {});
-      pc.ontrack = (event) => { 
-        console.log("[Call] Received remote track.");
-        // if (remoteVideoElement && event.streams[0]) {
-        //   remoteVideoElement.srcObject = event.streams[0];
-        // }
-        event.streams[0].getTracks().forEach((track) => {
-          remoteVideo.addTrack(track);
-        });
+      // Handle remote stream
+      pc.ontrack = (event) => {
+        console.log("[Call] Received remote track:", event.track.kind);
+        console.log("[Call] Remote streams count:", event.streams.length);
+        
+        if (event.streams && event.streams[0]) {
+          const remoteStream = event.streams[0];
+          console.log("[Call] Setting remote stream to video element");
+          
+          // Ensure video element is ready
+          if (remoteVideoElement) {
+            remoteVideoElement.srcObject = remoteStream;
+            remoteVideoElement.onloadedmetadata = () => {
+              console.log("[Call] Remote video metadata loaded, attempting to play");
+              remoteVideoElement.play().catch(e => {
+                console.error("[Call] Remote video play failed:", e);
+              });
+            };
+          }
+        }
       };
 
-      // pc.ontrack = (event) => {
-      //   console.log("[Call] Received remote track.", event.streams.length);
-      //   if (remoteVideoElement && event.streams[0]) {
-      //     // Ensure the video element is ready
-      //     setTimeout(() => {
-      //       remoteVideoElement.srcObject = event.streams[0];
-      //       remoteVideoElement.play().catch(e => console.error("[Video] Play failed:", e));
-      //     }, 50);
-      //   }
-      // };
+      // Monitor connection state
+      pc.onconnectionstatechange = () => {
+        console.log("[Call] Connection state:", pc.connectionState);
+        if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+          console.log("[Call] Connection failed, cleaning up");
+          cleanupMatch();
+        }
+      };
 
+      pc.oniceconnectionstatechange = () => {
+        console.log("[Call] ICE connection state:", pc.iceConnectionState);
+      };
+
+      // Remove existing listeners to prevent duplicates
       socket.off("video-offer");
       socket.off("video-answer");
       socket.off("ice-candidate");
       socket.off("end-video");
 
-
-      // WITH this enhanced cleanup:
-      // Remove existing listeners completely
-      // socket.removeAllListeners("video-offer");
-      // socket.removeAllListeners("video-answer");
-      // socket.removeAllListeners("ice-candidate");
-      // socket.removeAllListeners("end-video");
-
+      // Handle video offer
       socket.on("video-offer", async (offer, fromSocketId) => {
         try {
-          console.log("[Call] PeerConnection signaling state:", pc.signalingState);
+          console.log("[Call] Received video offer from:", fromSocketId);
+          console.log("[Call] Current signaling state:", pc.signalingState);
 
           if (pc.signalingState !== "stable") {
-            console.log("[Call] Rolling back and setting remote description...");
-            await Promise.all([
-              pc.setLocalDescription({ type: "rollback" }).catch(e => console.error("[Call] Rollback failed:", e)),
-              pc.setRemoteDescription(new RTCSessionDescription(offer)).catch(e => console.error("[Call] setRemoteDescription (rollback) failed:", e))
-            ]);
-          } else {
-            console.log("[Call] Setting remote description...");
-            await pc.setRemoteDescription(new RTCSessionDescription(offer));
+            console.log("[Call] Not in stable state, performing rollback");
+            await pc.setLocalDescription({ type: "rollback" });
           }
 
-          console.log("[Call] Creating answer...");
+          await pc.setRemoteDescription(new RTCSessionDescription(offer));
+          console.log("[Call] Set remote description successfully");
+
           const answer = await pc.createAnswer();
-
-          console.log("[Call] Setting local description with answer...");
           await pc.setLocalDescription(answer);
+          console.log("[Call] Created and set local answer");
 
-          console.log("[Call] Emitting video-answer...");
           socket.emit("video-answer", answer, fromSocketId);
-          console.log("[Call] Sent video-answer.");
+          console.log("[Call] Sent video answer");
+
+          // Process pending ICE candidates
+          for (const candidate of pendingCandidates.current) {
+            try {
+              await pc.addIceCandidate(candidate);
+              console.log("[ICE] Added pending candidate");
+            } catch (e) {
+              console.error("[ICE] Error adding pending candidate:", e);
+            }
+          }
+          pendingCandidates.current = [];
+
         } catch (error) {
-          console.error("[Call] Error handling offer:", error);
+          console.error("[Call] Error handling video offer:", error);
         }
       });
 
+      // Handle video answer
       socket.on("video-answer", async (answer) => {
-        console.log("[Socket] Received video-answer");
         try {
+          console.log("[Call] Received video answer");
+          console.log("[Call] Current signaling state:", pc.signalingState);
+
           if (pc.signalingState === "have-local-offer") {
             await pc.setRemoteDescription(new RTCSessionDescription(answer));
+            console.log("[Call] Set remote description from answer");
+
+            // Process pending ICE candidates
             for (const candidate of pendingCandidates.current) {
-              await pc.addIceCandidate(candidate);
+              try {
+                await pc.addIceCandidate(candidate);
+                console.log("[ICE] Added pending candidate after answer");
+              } catch (e) {
+                console.error("[ICE] Error adding pending candidate:", e);
+              }
             }
             pendingCandidates.current = [];
           }
         } catch (error) {
-          console.error("[Call] Error applying answer:", error);
+          console.error("[Call] Error handling video answer:", error);
         }
       });
 
+      // Handle ICE candidates
       socket.on("ice-candidate", async (candidate) => {
-        console.log("[Socket] Received ICE candidate");
         try {
+          console.log("[ICE] Received ICE candidate");
           const iceCandidate = new RTCIceCandidate(candidate);
+          
           if (pc.remoteDescription && pc.remoteDescription.type) {
             await pc.addIceCandidate(iceCandidate);
+            console.log("[ICE] Added ICE candidate");
           } else {
+            console.log("[ICE] Queuing ICE candidate (no remote description yet)");
             pendingCandidates.current.push(iceCandidate);
           }
         } catch (error) {
-          console.error("[ICE] Error adding candidate:", error);
+          console.error("[ICE] Error adding ICE candidate:", error);
         }
       });
 
+      // Handle call end
       socket.on("end-video", () => {
-        console.log("[Socket] Received end-video signal.");
-
-        setPeerConnection(null);
-        pendingCandidates.current = [];
-        if (remoteVideoElement) {
-          remoteVideoElement.srcObject = null;
-        }
+        console.log("[Call] Received end-video signal");
+        cleanupMatch();
       });
 
-      const offer = await pc.createOffer();
+      // Create and send offer
+      console.log("[Call] Creating offer...");
+      const offer = await pc.createOffer({
+        offerToReceiveAudio: true,
+        offerToReceiveVideo: true
+      });
+      
       await pc.setLocalDescription(offer);
+      console.log("[Call] Set local description, sending offer");
+      
       socket.emit("video-offer", offer, partnerId);
-      console.log("[Call] Sent video-offer.");
+      console.log("[Call] Video offer sent to:", partnerId);
+
     } catch (error) {
       console.error('[Call] Error starting video call:', error);
-      if (peerConnection) {
-        peerConnection.getReceivers().forEach(receiver => {
-          if (receiver.track) {
-            receiver.track.stop();
-          }
-        });
-        peerConnection.close();
-        setPeerConnection(null);
-      }
+      cleanupMatch();
     }
   };
 
   const endVideoCall = () => {
     const socket = socketRef.current;
-    if (isMatched) {
-      console.log("[Call] Ending video call.");
+    if (socket && matchDetails) {
+      console.log("[Call] Ending video call with:", matchDetails.partnerId);
       socket.emit("end-call", matchDetails.partnerId);
     }
     cleanupMatch();
   };
 
-  const togglePremium = () => {
-    if (user) {
-      const newPremiumStatus = !user.isPremium;
-      setIsPremium(newPremiumStatus);
-      if (!newPremiumStatus) {
-        setGenderSelectionFrozen(false);
-        setTrialTimer(180);
-        setTrialUsed(false);
-        if (user) {
-          api.user.updateProfile({ trialUsed: false }).catch(console.error);
-        }
-      }
-    }
-  };
-
   const handleGenderSelection = (gender) => {
     if (user?.isPremium || (!trialUsed && trialTimer > 0)) {
+      console.log("[Gender] Selected:", gender);
       setSelectedGender(gender);
     }
   };
@@ -501,7 +470,6 @@ export const ChatProvider = ({ children }) => {
     startVideoCall,
     setMyInterest,
     endVideoCall,
-    togglePremium,
     trialTimer,
     trialUsed,
     genderSelectionFrozen,
@@ -511,11 +479,6 @@ export const ChatProvider = ({ children }) => {
   return (
     <ChatContext.Provider value={value}>
       {children}
-      {user && !isPremium && !trialUsed && trialTimer > 0 && (
-        <div className="text-sm text-gray-500">
-          Free trial: {trialTimer}s remaining
-        </div>
-      )}
     </ChatContext.Provider>
   );
 };

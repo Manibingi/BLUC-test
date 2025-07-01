@@ -1,5 +1,3 @@
-// VideoChat.jsx
-
 import React, { useEffect, useRef, useState } from 'react';
 import { useChat } from '../../context/ChatContext';
 import { useAuth } from '../../context/AuthContext';
@@ -26,7 +24,6 @@ const VideoChat = ({ mode }) => {
   const [isCallActive, setIsCallActive] = useState(false);
 
   // Initialize local stream only once
-
   useEffect(() => {
     if (!streamInitializedRef.current) {
       initLocalStream();
@@ -59,58 +56,85 @@ const VideoChat = ({ mode }) => {
     };
   }, [isMatched, localStream]);
 
-  // Handle video call when matched
+  // Handle video call when matched - improved with better timing and error handling
   useEffect(() => {
     if (localStream && matchDetails?.partnerId && !isCallActive) {
+      console.log("Starting video call with partner:", matchDetails.partnerId);
+      
+      // Clean up any existing remote stream
       if (remoteVideoRef.current) {
+        if (remoteVideoRef.current.srcObject) {
+          const tracks = remoteVideoRef.current.srcObject.getTracks();
+          tracks.forEach(track => track.stop());
+        }
         remoteVideoRef.current.srcObject = null;
       }
-      console.log("starting video call");
-      startVideoCall(matchDetails.partnerId, localStream, remoteVideoRef.current);
-      setIsCallActive(true);
+      
+      // Add a small delay to ensure socket is ready
+      const timer = setTimeout(() => {
+        if (remoteVideoRef.current && localStream && matchDetails?.partnerId) {
+          startVideoCall(matchDetails.partnerId, localStream, remoteVideoRef.current);
+          setIsCallActive(true);
+        }
+      }, 500);
+
+      return () => clearTimeout(timer);
     }
-  }, [localStream, matchDetails, startVideoCall]);
-
-  // useEffect(() => {
-  //   if (localStream && matchDetails?.partnerId && !isCallActive) {
-  //     // Add a small delay to ensure DOM is ready
-  //     const timer = setTimeout(() => {
-  //       if (remoteVideoRef.current) {
-  //         remoteVideoRef.current.srcObject = null;
-  //         console.log("starting video call");
-  //         startVideoCall(matchDetails.partnerId, localStream, remoteVideoRef.current);
-  //         setIsCallActive(true);
-  //       }
-  //     }, 100);
-
-  //     return () => clearTimeout(timer);
-  //   }
-  // }, [localStream, matchDetails, startVideoCall, isCallActive]);
+  }, [localStream, matchDetails, startVideoCall, isCallActive]);
 
   const initLocalStream = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      console.log("Initializing local media stream...");
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: { 
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          frameRate: { ideal: 30 }
+        }, 
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        }
+      });
+      
+      console.log("Local stream obtained:", stream);
+      
+      // Set local video streams
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = stream;
-        localVideoStreamMobileRef.current.srcObject = stream;
+        localVideoRef.current.muted = true; // Prevent echo
+        localVideoRef.current.playsInline = true;
       }
+      
+      if (localVideoStreamMobileRef.current) {
+        localVideoStreamMobileRef.current.srcObject = stream;
+        localVideoStreamMobileRef.current.muted = true;
+        localVideoStreamMobileRef.current.playsInline = true;
+      }
+      
       setLocalStream(stream);
+      console.log("Local stream set successfully");
     } catch (error) {
       console.error('Error accessing media devices:', error);
+      // Handle permission denied or device not available
+      alert('Camera/microphone access is required for video chat. Please allow permissions and refresh the page.');
     }
   };
 
   useEffect(() => {
-    handleSkipMatch();
+    if (selectedGender !== "random") {
+      handleSkipMatch();
+    }
   }, [selectedGender]);
 
   const toggleVideo = () => {
     if (localStream) {
       const videoTrack = localStream.getVideoTracks()[0];
       if (videoTrack) {
-        // console.log("toggling video",videoTrack);
         videoTrack.enabled = !videoTrack.enabled;
         setIsVideoEnabled(videoTrack.enabled);
+        console.log("Video toggled:", videoTrack.enabled);
       }
     }
   };
@@ -121,50 +145,38 @@ const VideoChat = ({ mode }) => {
       if (audioTrack) {
         audioTrack.enabled = !audioTrack.enabled;
         setIsAudioEnabled(audioTrack.enabled);
+        console.log("Audio toggled:", audioTrack.enabled);
       }
     }
   };
 
-  useEffect(() => {
-    console.log("local stream", localStream);
-    console.log("local video ref", localVideoRef.current.srcObject);
-  }, [localStream]);
-
   const handleSkipMatch = async () => {
-    console.log("1 .At start of handleSkipMatch");
+    console.log("Skipping to next match...");
     try {
       setIsCallActive(false);
+      
+      // Clean up remote video immediately and properly
       if (remoteVideoRef.current) {
+        if (remoteVideoRef.current.srcObject) {
+          const tracks = remoteVideoRef.current.srcObject.getTracks();
+          tracks.forEach(track => {
+            track.stop();
+            console.log("Stopped remote track:", track.kind);
+          });
+        }
         remoteVideoRef.current.srcObject = null;
+        console.log("Remote video cleared");
       }
+      
       await next(mode);
     } catch (error) {
       console.error('Error during skip:', error);
     }
   };
 
-  // REPLACE with:
-  // const handleSkipMatch = async () => {
-  //   console.log("1 .At start of handleSkipMatch");
-  //   try {
-  //     setIsCallActive(false);
-
-  //     // Clean up remote video immediately
-  //     if (remoteVideoRef.current) {
-  //       if (remoteVideoRef.current.srcObject) {
-  //         remoteVideoRef.current.srcObject.getTracks().forEach(track => track.stop());
-  //       }
-  //       remoteVideoRef.current.srcObject = null;
-  //     }
-
-  //     await next(mode);
-  //   } catch (error) {
-  //     console.error('Error during skip:', error);
-  //   }
-  // };
-
   const selectGender = (gender) => {
     if (isPremium || (!trialUsed && trialTimer > 0)) {
+      console.log("Gender selected:", gender);
       setSelectedGender(gender);
     }
   };
@@ -188,6 +200,13 @@ const VideoChat = ({ mode }) => {
               playsInline
               muted={false}
               className="w-full h-full object-cover max-w-full max-h-full"
+              onLoadedMetadata={() => {
+                console.log("Remote video metadata loaded");
+                if (remoteVideoRef.current) {
+                  remoteVideoRef.current.play().catch(e => console.error("Remote video play failed:", e));
+                }
+              }}
+              onError={(e) => console.error("Remote video error:", e)}
             />
             {/* Local Video Overlay for mobile/tablet */}
             <div className="absolute top-2 right-2 w-20 h-20 md:hidden border-2 border-white rounded-md overflow-hidden shadow-lg bg-gray-800">
@@ -197,6 +216,7 @@ const VideoChat = ({ mode }) => {
                 autoPlay
                 muted
                 playsInline
+                onError={(e) => console.error("Local mobile video error:", e)}
               />
             </div>
           </div>
@@ -209,6 +229,7 @@ const VideoChat = ({ mode }) => {
               autoPlay
               muted
               playsInline
+              onError={(e) => console.error("Local desktop video error:", e)}
             />
           </div>
 
@@ -248,7 +269,7 @@ const VideoChat = ({ mode }) => {
           {/* Chat area - embedding the TextChat component */}
           <div className="flex-1 flex flex-col overflow-hidden min-h-0">
             {isMatched && matchDetails?.partnerId && (
-              <TextChat partnerId={matchDetails.partnerId} embedded={true} />
+              <TextChat partnerId={matchDetails.partnerId} embedded={true} mode={mode} />
             )}
             {!isMatched && (
               <div className="flex-1 flex items-center justify-center text-gray-500 text-center px-4">
@@ -319,6 +340,15 @@ const VideoChat = ({ mode }) => {
                   } border border-gray-300`}
               >
                 Male
+              </button>
+              <button
+                onClick={() => selectGender('random')}
+                className={`px-3 py-1 text-sm rounded-md ${selectedGender === 'random'
+                  ? "bg-blue-100 text-blue-700"
+                  : "bg-white text-gray-700 hover:bg-gray-100"
+                  } border border-gray-300`}
+              >
+                Random
               </button>
               {isPremium && (
                 <span className="ml-2 text-xs text-blue-500 font-medium">

@@ -2,18 +2,17 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useChat } from '../../context/ChatContext';
 import { Send, X, SkipForward } from 'lucide-react';
 
-const TextChat = ({ partnerId, embedded = false, mode="text",onClose}) => {
+const TextChat = ({ partnerId, embedded = false, mode = "text", onClose }) => {
   const [message, setMessage] = useState('');
   const [messages, setMessages] = useState([]);
   const messagesEndRef = useRef(null);
-  const { sendMessage, disconnectFromMatch,next,isMatched} = useChat();
+  const { sendMessage, disconnectFromMatch, next, isMatched } = useChat();
   
   // Listen for incoming messages 
   useEffect(() => {
     const handleUnload = () => {
-      if(isMatched){ 
+      if (isMatched) { 
         disconnectFromMatch(mode); 
-        print("hello")
       }
     };
   
@@ -21,27 +20,48 @@ const TextChat = ({ partnerId, embedded = false, mode="text",onClose}) => {
   
     return () => {
       window.removeEventListener('beforeunload', handleUnload);
-    ; 
     };
-  }, [isMatched]);
+  }, [isMatched, disconnectFromMatch, mode]);
   
   useEffect(() => {
-  const handleReceiveMessage = (msg) => { 
-    console.log(msg);
-    setMessages(prev => [...prev, { text: msg, sender: 'partner' }]);
-  };
+    const handleReceiveMessage = (msg) => { 
+      console.log("[TextChat] Received message:", msg);
+      setMessages(prev => [...prev, { text: msg, sender: 'partner' }]);
+    };
 
-  if (window.socket) {
-    window.socket.on('receive-message', handleReceiveMessage);
-  }
-
-  // ✅ Correct cleanup on unmount
-  return () => {
     if (window.socket) {
-      window.socket.off('receive-message', handleReceiveMessage);
+      window.socket.on('receive-message', handleReceiveMessage);
     }
-  };
-}, []);
+
+    // Cleanup on unmount
+    return () => {
+      if (window.socket) {
+        window.socket.off('receive-message', handleReceiveMessage);
+      }
+    };
+  }, []);
+
+  // Handle partner disconnection
+  useEffect(() => {
+    const handleDisconnect = (message) => {
+      console.log("[TextChat] Partner disconnected:", message);
+      setMessages(prev => [...prev, { 
+        text: message || "Partner disconnected", 
+        sender: 'system' 
+      }]);
+    };
+
+    if (window.socket) {
+      window.socket.on('disconect', handleDisconnect);
+    }
+
+    return () => {
+      if (window.socket) {
+        window.socket.off('disconect', handleDisconnect);
+      }
+    };
+  }, []);
+  
   // Auto scroll to bottom when new messages arrive
   useEffect(() => {
     scrollToBottom();
@@ -58,7 +78,8 @@ const TextChat = ({ partnerId, embedded = false, mode="text",onClose}) => {
       
       // Add to local messages
       setMessages(prev => [...prev, { text: message, sender: 'self' }]);
-      console.log("he")
+      console.log("[TextChat] Message sent:", message);
+      
       // Clear input
       setMessage('');
     }
@@ -72,6 +93,8 @@ const TextChat = ({ partnerId, embedded = false, mode="text",onClose}) => {
   };
   
   const handleSkip = () => {
+    console.log("[TextChat] Skipping to next partner");
+    setMessages([]); // Clear messages when skipping
     next(mode);
   };
   
@@ -93,7 +116,7 @@ const TextChat = ({ partnerId, embedded = false, mode="text",onClose}) => {
             <SkipForward size={18} />
           </button>
           
-          {embedded && (
+          {embedded && onClose && (
             <button 
               onClick={onClose}
               className="text-gray-500 hover:text-gray-800 p-2"
@@ -118,6 +141,8 @@ const TextChat = ({ partnerId, embedded = false, mode="text",onClose}) => {
               className={`mb-3 ${
                 msg.sender === 'self'
                   ? 'flex justify-end'
+                  : msg.sender === 'system'
+                  ? 'flex justify-center'
                   : 'flex justify-start'
               }`}
             >
@@ -125,6 +150,8 @@ const TextChat = ({ partnerId, embedded = false, mode="text",onClose}) => {
                 className={`px-4 py-2 rounded-lg max-w-[80%] ${
                   msg.sender === 'self'
                     ? 'bg-blue-600 text-white'
+                    : msg.sender === 'system'
+                    ? 'bg-yellow-100 text-yellow-800 text-sm'
                     : 'bg-gray-200 text-gray-800'
                 }`}
               >
@@ -146,10 +173,12 @@ const TextChat = ({ partnerId, embedded = false, mode="text",onClose}) => {
             onKeyPress={handleKeyPress}
             placeholder="Type a message..."
             className="flex-1 py-2 px-3 border border-gray-300 rounded-l-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+            disabled={!partnerId}
           />
           <button
             onClick={handleSendMessage}
-            className="bg-blue-600 hover:bg-blue-700 text-white py-2 px-4 rounded-r-lg transition-colors"
+            disabled={!message.trim() || !partnerId}
+            className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white py-2 px-4 rounded-r-lg transition-colors"
           >
             <Send size={18} />
           </button>
