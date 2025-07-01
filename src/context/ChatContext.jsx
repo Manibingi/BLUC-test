@@ -25,6 +25,9 @@ export const ChatProvider = ({ children }) => {
   const isCleaningUpRef = useRef(false);
   const localStreamRef = useRef(null);
   const remoteStreamRef = useRef(null);
+  const connectionTimeoutRef = useRef(null);
+  const reconnectAttemptsRef = useRef(0);
+  const maxReconnectAttempts = 3;
 
   const iceServers = {
     iceServers: [
@@ -103,6 +106,7 @@ export const ChatProvider = ({ children }) => {
       console.log("[ChatContext] Emitting user-details:", { gender, interest, name, mode, selectedGender: genderToSend });
       socketInstance.emit('user-details', { gender, interest, name, mode, selectedGender: genderToSend });
       setIsConnecting(true);
+      reconnectAttemptsRef.current = 0; // Reset reconnect attempts on successful connection
     });
 
     socketInstance.on('connect_error', (error) => {
@@ -161,6 +165,11 @@ export const ChatProvider = ({ children }) => {
     console.log("[ChatContext] Disconnecting...");
     isCleaningUpRef.current = true;
     
+    // Clear any pending timeouts
+    if (connectionTimeoutRef.current) {
+      clearTimeout(connectionTimeoutRef.current);
+    }
+    
     if (socketRef.current) {
       socketRef.current.removeAllListeners();
       socketRef.current.disconnect();
@@ -181,33 +190,44 @@ export const ChatProvider = ({ children }) => {
     setIsMatched(false);
     setMatchDetails(null);
 
+    // Clear connection timeout
+    if (connectionTimeoutRef.current) {
+      clearTimeout(connectionTimeoutRef.current);
+      connectionTimeoutRef.current = null;
+    }
+
     // Clean up peer connection
     if (peerConnection) {
       console.log("[ChatContext] Closing peer connection...");
       
-      // Remove all event listeners
-      peerConnection.onicecandidate = null;
-      peerConnection.ontrack = null;
-      peerConnection.onconnectionstatechange = null;
-      peerConnection.oniceconnectionstatechange = null;
-      peerConnection.onsignalingstatechange = null;
+      try {
+        // Remove all event listeners
+        peerConnection.onicecandidate = null;
+        peerConnection.ontrack = null;
+        peerConnection.onconnectionstatechange = null;
+        peerConnection.oniceconnectionstatechange = null;
+        peerConnection.onsignalingstatechange = null;
+        
+        // Stop all tracks
+        peerConnection.getReceivers().forEach(receiver => {
+          if (receiver.track) {
+            receiver.track.stop();
+            console.log("[ChatContext] Stopped receiver track:", receiver.track.kind);
+          }
+        });
+        
+        peerConnection.getSenders().forEach(sender => {
+          if (sender.track) {
+            sender.track.stop();
+            console.log("[ChatContext] Stopped sender track:", sender.track.kind);
+          }
+        });
+        
+        peerConnection.close();
+      } catch (error) {
+        console.error("[ChatContext] Error during peer connection cleanup:", error);
+      }
       
-      // Stop all tracks
-      peerConnection.getReceivers().forEach(receiver => {
-        if (receiver.track) {
-          receiver.track.stop();
-          console.log("[ChatContext] Stopped receiver track:", receiver.track.kind);
-        }
-      });
-      
-      peerConnection.getSenders().forEach(sender => {
-        if (sender.track) {
-          sender.track.stop();
-          console.log("[ChatContext] Stopped sender track:", sender.track.kind);
-        }
-      });
-      
-      peerConnection.close();
       setPeerConnection(null);
     }
 
@@ -244,12 +264,32 @@ export const ChatProvider = ({ children }) => {
     }
   };
 
-  const next = (mode) => {
+  const next = async (mode) => {
     console.log("[ChatContext] Skipping to next partner...");
     const socket = socketRef.current;
     if (socket && matchDetails) {
       console.log("[ChatContext] Emitting next with partnerId:", matchDetails.partnerId);
+      
+      // Clean up current connection first
+      await cleanupMatch();
+      
+      // Emit next event
       socket.emit('next', matchDetails.partnerId, mode);
+      
+      // Reset connection state
+      setIsConnecting(true);
+    } else if (socket) {
+      // If no current match, just try to find a new one
+      console.log("[ChatContext] No current match, finding new partner");
+      setIsConnecting(true);
+      const genderToSend = (user?.isPremium || (!trialUsed && trialTimer > 0)) ? selectedGender : "random";
+      socket.emit('user-details', {
+        gender: user?.gender,
+        interest: interest,
+        name: user?.fullName,
+        mode,
+        selectedGender: genderToSend
+      });
     }
   };
 
@@ -288,6 +328,15 @@ export const ChatProvider = ({ children }) => {
       const pc = new RTCPeerConnection(iceServers);
       setPeerConnection(pc);
 
+      // Set connection timeout
+      connectionTimeoutRef.current = setTimeout(() => {
+        if (pc.connectionState !== 'connected' && reconnectAttemptsRef.current < maxReconnectAttempts) {
+          console.log("[ChatContext] Connection timeout, attempting reconnect");
+          reconnectAttemptsRef.current++;
+          startVideoCall(partnerId, localStream, remoteVideoElement);
+        }
+      }, 15000);
+
       // Add local stream tracks with better error handling
       localStream.getTracks().forEach(track => {
         console.log("[ChatContext] Adding local track:", track.kind, track.readyState);
@@ -320,6 +369,12 @@ export const ChatProvider = ({ children }) => {
           
           console.log("[ChatContext] Setting remote stream to video element");
           console.log("[ChatContext] Remote stream tracks:", remoteStream.getTracks().map(t => `${t.kind}: ${t.readyState}`));
+          
+          // Clear connection timeout on successful stream
+          if (connectionTimeoutRef.current) {
+            clearTimeout(connectionTimeoutRef.current);
+            connectionTimeoutRef.current = null;
+          }
           
           // Ensure video element is ready and set stream
           if (remoteVideoElement) {
@@ -360,14 +415,35 @@ export const ChatProvider = ({ children }) => {
         console.log("[ChatContext] Connection state:", pc.connectionState);
         if (pc.connectionState === 'connected') {
           console.log("[ChatContext] Peer connection established successfully");
-        } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
-          console.log("[ChatContext] Connection failed, cleaning up");
-          cleanupMatch();
+          reconnectAttemptsRef.current = 0; // Reset on successful connection
+          if (connectionTimeoutRef.current) {
+            clearTimeout(connectionTimeoutRef.current);
+            connectionTimeoutRef.current = null;
+          }
+        } else if (pc.connectionState === 'failed') {
+          console.log("[ChatContext] Connection failed");
+          if (reconnectAttemptsRef.current < maxReconnectAttempts) {
+            console.log("[ChatContext] Attempting to reconnect...");
+            reconnectAttemptsRef.current++;
+            setTimeout(() => {
+              startVideoCall(partnerId, localStream, remoteVideoElement);
+            }, 2000);
+          } else {
+            console.log("[ChatContext] Max reconnection attempts reached, cleaning up");
+            cleanupMatch();
+          }
+        } else if (pc.connectionState === 'disconnected') {
+          console.log("[ChatContext] Connection disconnected");
+          // Don't immediately cleanup on disconnect, wait for reconnection
         }
       };
 
       pc.oniceconnectionstatechange = () => {
         console.log("[ChatContext] ICE connection state:", pc.iceConnectionState);
+        if (pc.iceConnectionState === 'failed' && reconnectAttemptsRef.current < maxReconnectAttempts) {
+          console.log("[ChatContext] ICE connection failed, attempting restart");
+          pc.restartIce();
+        }
       };
 
       pc.onsignalingstatechange = () => {
@@ -507,6 +583,18 @@ export const ChatProvider = ({ children }) => {
     }
   };
 
+  const resetConnection = () => {
+    reconnectAttemptsRef.current = 0;
+    if (connectionTimeoutRef.current) {
+      clearTimeout(connectionTimeoutRef.current);
+      connectionTimeoutRef.current = null;
+    }
+  };
+
+  const cleanupVideoCall = () => {
+    cleanupMatch();
+  };
+
   const value = {
     socket: socketRef.current,
     isConnecting,
@@ -527,7 +615,9 @@ export const ChatProvider = ({ children }) => {
     trialTimer,
     trialUsed,
     genderSelectionFrozen,
-    isPremium
+    isPremium,
+    cleanupVideoCall,
+    resetConnection
   };
 
   return (
