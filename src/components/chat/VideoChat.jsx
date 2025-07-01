@@ -165,9 +165,12 @@ const VideoChat = ({ mode }) => {
       setRemoteStream(null);
       setHasRemoteVideo(false);
       
-      // Clear remote video element
+      // Clear remote video element but don't interrupt local video
       if (remoteVideoRef.current) {
-        remoteVideoRef.current.srcObject = null;
+        const currentSrc = remoteVideoRef.current.srcObject;
+        if (currentSrc && currentSrc !== localStream) {
+          remoteVideoRef.current.srcObject = null;
+        }
       }
       
       // Start the video call with a delay to ensure socket is ready
@@ -352,10 +355,13 @@ const VideoChat = ({ mode }) => {
         clearTimeout(retryTimeoutRef.current);
       }
       
-      // Clean up remote video immediately
+      // Clear remote video but preserve local stream
       if (remoteVideoRef.current) {
-        remoteVideoRef.current.srcObject = null;
-        console.log("[VideoChat] Remote video cleared");
+        const currentSrc = remoteVideoRef.current.srcObject;
+        if (currentSrc && currentSrc !== localStream) {
+          remoteVideoRef.current.srcObject = null;
+          console.log("[VideoChat] Remote video cleared, local stream preserved");
+        }
       }
       
       await next(mode);
@@ -416,14 +422,18 @@ const VideoChat = ({ mode }) => {
               autoPlay
               playsInline
               muted={false}
+              preload="metadata"
               className={`w-full h-full object-cover max-w-full max-h-full ${!hasRemoteVideo ? 'opacity-0' : 'opacity-100'}`}
               onLoadedMetadata={() => {
                 console.log("[VideoChat] Remote video metadata loaded");
                 setHasRemoteVideo(true);
-                if (remoteVideoRef.current) {
-                  remoteVideoRef.current.play().catch(e => 
-                    console.error("[VideoChat] Remote video play failed:", e)
-                  );
+                if (remoteVideoRef.current && remoteVideoRef.current.paused) {
+                  const playPromise = remoteVideoRef.current.play();
+                  if (playPromise) {
+                    playPromise.catch(e => 
+                      console.error("[VideoChat] Remote video play failed:", e)
+                    );
+                  }
                 }
               }}
               onError={(e) => {
@@ -433,10 +443,27 @@ const VideoChat = ({ mode }) => {
               onCanPlay={() => {
                 console.log("[VideoChat] Remote video can play");
                 setHasRemoteVideo(true);
+                if (remoteVideoRef.current && remoteVideoRef.current.paused) {
+                  remoteVideoRef.current.play().catch(e => 
+                    console.error("[VideoChat] Remote video auto-play failed:", e)
+                  );
+                }
               }}
               onPlaying={() => {
                 console.log("[VideoChat] Remote video is playing");
                 setHasRemoteVideo(true);
+              }}
+              onPause={() => {
+                console.log("[VideoChat] Remote video paused - attempting to resume");
+                if (remoteVideoRef.current && remoteVideoRef.current.srcObject) {
+                  setTimeout(() => {
+                    if (remoteVideoRef.current && remoteVideoRef.current.paused) {
+                      remoteVideoRef.current.play().catch(e => 
+                        console.error("[VideoChat] Remote video resume failed:", e)
+                      );
+                    }
+                  }, 100);
+                }
               }}
               onWaiting={() => {
                 console.log("[VideoChat] Remote video is waiting");
@@ -444,7 +471,7 @@ const VideoChat = ({ mode }) => {
               onStalled={() => {
                 console.log("[VideoChat] Remote video stalled");
               }}
-            />
+            /></video_1>
             
             {/* Local Video Overlay for mobile/tablet */}
             <div className="absolute top-2 right-2 w-20 h-20 md:hidden border-2 border-white rounded-md overflow-hidden shadow-lg bg-gray-800">
@@ -454,7 +481,16 @@ const VideoChat = ({ mode }) => {
                 autoPlay
                 muted
                 playsInline
+                preload="metadata"
                 onError={(e) => console.error("[VideoChat] Local mobile video error:", e)}
+                onLoadedMetadata={() => {
+                  console.log("[VideoChat] Local mobile video metadata loaded");
+                  if (localVideoStreamMobileRef.current && localVideoStreamMobileRef.current.paused) {
+                    localVideoStreamMobileRef.current.play().catch(e => 
+                      console.error("[VideoChat] Local mobile video play failed:", e)
+                    );
+                  }
+                }}
               />
               {!isVideoEnabled && (
                 <div className="absolute inset-0 bg-gray-800 flex items-center justify-center">
@@ -472,7 +508,16 @@ const VideoChat = ({ mode }) => {
               autoPlay
               muted
               playsInline
+              preload="metadata"
               onError={(e) => console.error("[VideoChat] Local desktop video error:", e)}
+              onLoadedMetadata={() => {
+                console.log("[VideoChat] Local desktop video metadata loaded");
+                if (localVideoRef.current && localVideoRef.current.paused) {
+                  localVideoRef.current.play().catch(e => 
+                    console.error("[VideoChat] Local desktop video play failed:", e)
+                  );
+                }
+              }}
             />
             {!isVideoEnabled && (
               <div className="absolute inset-0 bg-gray-800 flex items-center justify-center">
