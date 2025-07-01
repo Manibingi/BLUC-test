@@ -147,7 +147,8 @@ export const ChatProvider = ({ children }) => {
       console.log("[ChatContext] Received 'find other' event");
       if (isCleaningUpRef.current) return;
       
-      await cleanupMatch();
+      // Keep local stream when finding other match
+      await cleanupMatch(true);
       
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
@@ -540,11 +541,25 @@ export const ChatProvider = ({ children }) => {
       window.socket = null;
     }
     
-    cleanupMatch();
+    // Stop local stream when disconnecting completely
+    cleanupMatch(false);
+    
+    // Also stop the local stream reference
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach(track => {
+        try {
+          track.stop();
+        } catch (error) {
+          console.error("[ChatContext] Error stopping local stream track:", error);
+        }
+      });
+      localStreamRef.current = null;
+    }
+    
     isCleaningUpRef.current = false;
   };
 
-  const cleanupMatch = async () => {
+  const cleanupMatch = async (keepLocalStream = false) => {
     if (isCleaningUpRef.current) return;
     isCleaningUpRef.current = true;
     
@@ -572,18 +587,21 @@ export const ChatProvider = ({ children }) => {
         peerConnectionRef.current.onconnectionstatechange = null;
         peerConnectionRef.current.oniceconnectionstatechange = null;
         
-        // Stop all tracks
+        // Stop only remote tracks from peer connection
         peerConnectionRef.current.getReceivers().forEach(receiver => {
           if (receiver.track) {
             receiver.track.stop();
           }
         });
         
-        peerConnectionRef.current.getSenders().forEach(sender => {
-          if (sender.track) {
-            sender.track.stop();
-          }
-        });
+        // Only stop local tracks if we're not keeping the local stream
+        if (!keepLocalStream) {
+          peerConnectionRef.current.getSenders().forEach(sender => {
+            if (sender.track) {
+              sender.track.stop();
+            }
+          });
+        }
         
         peerConnectionRef.current.close();
       } catch (error) {
@@ -594,7 +612,7 @@ export const ChatProvider = ({ children }) => {
       setPeerConnection(null);
     }
 
-    // Clean up streams
+    // Clean up remote stream only
     if (remoteStreamRef.current) {
       remoteStreamRef.current.getTracks().forEach(track => {
         try {
@@ -631,12 +649,14 @@ export const ChatProvider = ({ children }) => {
     }
   };
 
-  const next = (mode) => {
+  const next = async (mode) => {
     console.log("[ChatContext] Skipping to next partner...");
     const socket = socketRef.current;
     if (socket && matchDetails) {
       console.log("[ChatContext] Emitting next with partnerId:", matchDetails.partnerId);
       socket.emit('next', matchDetails.partnerId, mode);
+      // Keep local stream when skipping to next match
+      await cleanupMatch(true);
     }
   };
 
@@ -654,7 +674,8 @@ export const ChatProvider = ({ children }) => {
       console.log("[ChatContext] Ending video call with:", matchDetails.partnerId);
       socket.emit("end-call", matchDetails.partnerId);
     }
-    cleanupMatch();
+    // Don't keep local stream when ending call completely
+    cleanupMatch(false);
   };
 
   const handleGenderSelection = (gender) => {
