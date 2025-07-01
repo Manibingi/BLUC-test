@@ -99,31 +99,18 @@ export default (io, socket) => {
         handleVideoCallEnd(socket.id, partnerSocketId);
       }
       
-      // Clean up the pair immediately
+      // Clean up the pair
       activePairs.delete(socket.id);
       activePairs.delete(partnerSocketId);
       
-      // Remove both users from waiting lists to prevent conflicts
-      videowaitingUsers.delete(socket.id);
-      videowaitingUsers.delete(partnerSocketId);
-      textwaitingUsers.delete(socket.id);
-      textwaitingUsers.delete(partnerSocketId);
-      
-      // Notify partner first
+      // Notify both users to find new partners
       if (partnerSocket) {
         console.log(`[SocketHandler] Notifying partner ${partnerSocketId} to find other`);
         partnerSocket.emit("find other");
       }
       
-      // Notify current user
       console.log(`[SocketHandler] Notifying current user ${socket.id} to find other`);
       socket.emit("find other");
-      
-      // Add a small delay before allowing new connections to prevent race conditions
-      setTimeout(() => {
-        console.log(`[SocketHandler] Ready for new connections for ${socket.id}`);
-      }, 500);
-      
     } catch (error) {
       console.error(`[SocketHandler] Error in next:`, error);
     }
@@ -148,7 +135,6 @@ export default (io, socket) => {
       if (target) {
         target.emit("video-offer", offer, socket.id);
         activeVideoCalls.add(`${socket.id}-${toSocketId}`);
-        activeVideoCalls.add(`${toSocketId}-${socket.id}`); // Add both directions
         console.log(`[SocketHandler] Video offer delivered to ${toSocketId}`);
       } else {
         console.log(`[SocketHandler] Target ${toSocketId} not found for offer`);
@@ -199,20 +185,12 @@ export default (io, socket) => {
   socket.on("end-call", (partnerId) => {
     try {
       console.log(`[SocketHandler] End call from ${socket.id} to ${partnerId}`);
-      
-      // Remove from waiting lists
       videowaitingUsers.delete(socket.id);
-      videowaitingUsers.delete(partnerId);
-      
       const partnerSocket = io.sockets.sockets.get(partnerId);
       if (partnerSocket) {
         partnerSocket.emit("end-video");
         partnerSocket.emit("find other");
       }
-      
-      socket.emit("end-video");
-      socket.emit("find other");
-      
       handleVideoCallEnd(socket.id, partnerId);
     } catch (error) {
       console.error(`[SocketHandler] Error in end-call:`, error);
@@ -233,12 +211,6 @@ export default (io, socket) => {
 
     for (let [id, otherSocket] of waitingUsers) {
       if (id === socket.id) continue;
-
-      // Skip if this socket is already in an active pair
-      if (activePairs.has(id)) {
-        console.log(`[SocketHandler] Skipping ${id} - already in active pair`);
-        continue;
-      }
 
       const interestsMatch = otherSocket.data?.interest === socket.data.interest;
       const genderMatches =
@@ -279,24 +251,18 @@ export default (io, socket) => {
   function connectUsers(socketA, socketB, mode) {
     try {
       const waitingUsers = waitingUsersMap[mode];
-      
-      // Remove both users from waiting list
-      waitingUsers.delete(socketA.id);
       waitingUsers.delete(socketB.id);
 
       console.log(`[SocketHandler] Connecting ${socketA.id} and ${socketB.id} in ${mode} mode`);
 
-      // Set up active pairs
-      activePairs.set(socketA.id, socketB.id);
-      activePairs.set(socketB.id, socketA.id);
-
-      // Emit match found events
       socketA.emit("match-found", { matched: true, socketId: socketB.id });
       socketB.emit("match-found", { matched: true, socketId: socketA.id });
 
+      activePairs.set(socketA.id, socketB.id);
+      activePairs.set(socketB.id, socketA.id);
+
       if (mode === "video") {
         activeVideoCalls.add(`${socketA.id}-${socketB.id}`);
-        activeVideoCalls.add(`${socketB.id}-${socketA.id}`); // Add both directions
         console.log(`[SocketHandler] Video call pair created: ${socketA.id}-${socketB.id}`);
       }
 
@@ -330,7 +296,7 @@ export default (io, socket) => {
         activePairs.delete(partnerId);
       }
 
-      // Clean up video calls - check all possible combinations
+      // Clean up video calls
       const callsToRemove = [];
       for (const callId of activeVideoCalls) {
         if (callId.includes(userId)) {
@@ -369,10 +335,6 @@ export default (io, socket) => {
       // Clean up active pairs
       activePairs.delete(userId);
       activePairs.delete(partnerId);
-      
-      // Remove from waiting lists to prevent conflicts
-      videowaitingUsers.delete(userId);
-      videowaitingUsers.delete(partnerId);
       
       console.log(`[SocketHandler] Video call cleanup completed`);
     } catch (error) {
