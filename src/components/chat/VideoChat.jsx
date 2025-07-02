@@ -1,10 +1,10 @@
-
 import React, { useEffect, useRef, useState } from 'react';
 import { useChat } from '../../context/ChatContext';
 import { useAuth } from '../../context/AuthContext';
-import { Video, Mic, SkipForward, VideoOff, MicOff } from 'lucide-react';
+import { Video, Mic, SkipForward, VideoOff, MicOff, Flag } from 'lucide-react';
 import { useNavigate } from "react-router-dom";
 import TextChat from './TextChat';
+import ReportModal from '../moderation/ReportModal';
 
 const VideoChat = ({ mode }) => {
   const localVideoRef = useRef(null);
@@ -23,7 +23,7 @@ const VideoChat = ({ mode }) => {
   const [connectionState, setConnectionState] = useState('new');
   const [iceConnectionState, setIceConnectionState] = useState('new');
   const [hasRemoteVideo, setHasRemoteVideo] = useState(false);
-  
+
   const { 
     socket, 
     startVideoCall, 
@@ -41,10 +41,11 @@ const VideoChat = ({ mode }) => {
     peerConnection,
     setPeerConnection
   } = useChat();
-  
+
   const { user, isPremium } = useAuth();
   const navigate = useNavigate();
   const [isCallActive, setIsCallActive] = useState(false);
+  const [showReportModal, setShowReportModal] = useState(false);
 
   // Initialize local stream with better error handling
   useEffect(() => {
@@ -100,7 +101,7 @@ const VideoChat = ({ mode }) => {
         const state = peerConnection.connectionState;
         console.log(`[VideoChat] Connection state changed to: ${state}`);
         setConnectionState(state);
-        
+
         if (state === 'failed' || state === 'disconnected') {
           console.log('[VideoChat] Connection failed, attempting to restart');
           handleConnectionFailure();
@@ -114,7 +115,7 @@ const VideoChat = ({ mode }) => {
         const state = peerConnection.iceConnectionState;
         console.log(`[VideoChat] ICE connection state changed to: ${state}`);
         setIceConnectionState(state);
-        
+
         if (state === 'failed') {
           console.log('[VideoChat] ICE connection failed, restarting ICE');
           if (peerConnection.connectionState !== 'closed') {
@@ -130,7 +131,7 @@ const VideoChat = ({ mode }) => {
           console.log('[VideoChat] Setting remote stream with tracks:', stream.getTracks().map(t => t.kind));
           setRemoteStream(stream);
           setHasRemoteVideo(true);
-          
+
           // Set stream to video elements
           if (remoteVideoRef.current) {
             remoteVideoRef.current.srcObject = stream;
@@ -160,11 +161,11 @@ const VideoChat = ({ mode }) => {
   useEffect(() => {
     if (localStream && matchDetails?.partnerId && !isCallActive && isMatched) {
       console.log("[VideoChat] Starting video call with partner:", matchDetails.partnerId);
-      
+
       // Clear remote stream state
       setRemoteStream(null);
       setHasRemoteVideo(false);
-      
+
       // Clear remote video element but don't interrupt local video
       if (remoteVideoRef.current) {
         const currentSrc = remoteVideoRef.current.srcObject;
@@ -172,7 +173,7 @@ const VideoChat = ({ mode }) => {
           remoteVideoRef.current.srcObject = null;
         }
       }
-      
+
       // Start the video call with a delay to ensure socket is ready
       const timer = setTimeout(() => {
         if (localStream && matchDetails?.partnerId && !isCallActive && isMatched) {
@@ -194,11 +195,11 @@ const VideoChat = ({ mode }) => {
       setRemoteStream(null);
       setHasRemoteVideo(false);
       connectionAttemptRef.current = 0;
-      
+
       if (remoteVideoRef.current) {
         remoteVideoRef.current.srcObject = null;
       }
-      
+
       if (retryTimeoutRef.current) {
         clearTimeout(retryTimeoutRef.current);
       }
@@ -208,7 +209,7 @@ const VideoChat = ({ mode }) => {
   const initLocalStream = async () => {
     try {
       console.log("[VideoChat] Requesting media permissions...");
-      
+
       const constraints = {
         video: { 
           width: { ideal: 1280, max: 1920 },
@@ -227,14 +228,14 @@ const VideoChat = ({ mode }) => {
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       console.log("[VideoChat] Local stream obtained successfully");
       console.log("[VideoChat] Stream tracks:", stream.getTracks().map(t => `${t.kind}: ${t.label}`));
-      
+
       // Set local video streams with proper error handling
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = stream;
         localVideoRef.current.muted = true;
         localVideoRef.current.playsInline = true;
         localVideoRef.current.autoplay = true;
-        
+
         localVideoRef.current.onloadedmetadata = () => {
           console.log("[VideoChat] Local video metadata loaded");
           localVideoRef.current.play().catch(e => 
@@ -242,13 +243,13 @@ const VideoChat = ({ mode }) => {
           );
         };
       }
-      
+
       if (localVideoStreamMobileRef.current) {
         localVideoStreamMobileRef.current.srcObject = stream;
         localVideoStreamMobileRef.current.muted = true;
         localVideoStreamMobileRef.current.playsInline = true;
         localVideoStreamMobileRef.current.autoplay = true;
-        
+
         localVideoStreamMobileRef.current.onloadedmetadata = () => {
           console.log("[VideoChat] Local mobile video metadata loaded");
           localVideoStreamMobileRef.current.play().catch(e => 
@@ -256,12 +257,12 @@ const VideoChat = ({ mode }) => {
           );
         };
       }
-      
+
       setLocalStream(stream);
       console.log("[VideoChat] Local stream set successfully");
     } catch (error) {
       console.error('[VideoChat] Error accessing media devices:', error);
-      
+
       let errorMessage = 'Camera/microphone access is required for video chat.';
       if (error.name === 'NotAllowedError') {
         errorMessage = 'Please allow camera and microphone permissions and refresh the page.';
@@ -270,7 +271,7 @@ const VideoChat = ({ mode }) => {
       } else if (error.name === 'NotReadableError') {
         errorMessage = 'Camera or microphone is already in use by another application.';
       }
-      
+
       alert(errorMessage);
       navigate('/');
     }
@@ -291,7 +292,7 @@ const VideoChat = ({ mode }) => {
       if (retryTimeoutRef.current) {
         clearTimeout(retryTimeoutRef.current);
       }
-      
+
       // Wait before retrying
       retryTimeoutRef.current = setTimeout(async () => {
         if (localStream && matchDetails?.partnerId && isMatched) {
@@ -299,12 +300,12 @@ const VideoChat = ({ mode }) => {
           setIsCallActive(false);
           setRemoteStream(null);
           setHasRemoteVideo(false);
-          
+
           // Clean up remote video
           if (remoteVideoRef.current) {
             remoteVideoRef.current.srcObject = null;
           }
-          
+
           // Restart the call
           setTimeout(() => {
             if (localStream && matchDetails?.partnerId && !isCallActive && isMatched) {
@@ -350,11 +351,11 @@ const VideoChat = ({ mode }) => {
       setRemoteStream(null);
       setHasRemoteVideo(false);
       connectionAttemptRef.current = 0;
-      
+
       if (retryTimeoutRef.current) {
         clearTimeout(retryTimeoutRef.current);
       }
-      
+
       // Clear remote video but preserve local stream
       if (remoteVideoRef.current) {
         const currentSrc = remoteVideoRef.current.srcObject;
@@ -363,7 +364,7 @@ const VideoChat = ({ mode }) => {
           console.log("[VideoChat] Remote video cleared, local stream preserved");
         }
       }
-      
+
       await next(mode);
     } catch (error) {
       console.error('[VideoChat] Error during skip:', error);
@@ -381,20 +382,46 @@ const VideoChat = ({ mode }) => {
     if (!isMatched) {
       return isConnecting ? "Finding someone to chat with..." : "Waiting for match...";
     }
-    
+
     if (connectionState === 'connecting' || iceConnectionState === 'checking') {
       return "Connecting to video...";
     }
-    
+
     if (connectionState === 'connected' && iceConnectionState === 'connected') {
       return hasRemoteVideo ? "Connected" : "Connected - Waiting for video...";
     }
-    
+
     if (connectionState === 'failed' || iceConnectionState === 'failed') {
       return `Connection failed (attempt ${connectionAttemptRef.current}/${maxConnectionAttempts})`;
     }
-    
+
     return "Establishing connection...";
+  };
+
+  const handleReportSubmit = async (reportData) => {
+    try {
+      const response = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/reports/create`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        },
+        body: JSON.stringify({
+          ...reportData,
+          chatMode: 'video'
+        })
+      });
+
+      if (response.ok) {
+        alert('Report submitted successfully');
+        setShowReportModal(false);
+      } else {
+        throw new Error('Failed to submit report');
+      }
+    } catch (error) {
+      console.error('Error submitting report:', error);
+      alert('Failed to submit report. Please try again.');
+    }
   };
 
   return (
@@ -416,7 +443,7 @@ const VideoChat = ({ mode }) => {
                 )}
               </div>
             )}
-            
+
             <video
               ref={remoteVideoRef}
               autoPlay
@@ -471,8 +498,8 @@ const VideoChat = ({ mode }) => {
               onStalled={() => {
                 console.log("[VideoChat] Remote video stalled");
               }}
-            /></video_1>
-            
+            />
+
             {/* Local Video Overlay for mobile/tablet */}
             <div className="absolute top-2 right-2 w-20 h-20 md:hidden border-2 border-white rounded-md overflow-hidden shadow-lg bg-gray-800">
               <video
@@ -600,6 +627,15 @@ const VideoChat = ({ mode }) => {
             >
               <SkipForward size={24} />
             </button>
+            {matchDetails?.partnerId && (
+              <button
+                onClick={() => setShowReportModal(true)}
+                className="bg-red-600 hover:bg-red-700 text-white p-3 rounded-full transition-colors"
+                title="Report user"
+              >
+                <Flag size={24} />
+              </button>
+            )}
           </div>
 
           {/* Gender Selection */}
@@ -658,6 +694,12 @@ const VideoChat = ({ mode }) => {
           </div>
         </div>
       </div>
+      <ReportModal
+        isOpen={showReportModal}
+        onClose={() => setShowReportModal(false)}
+        onSubmit={handleReportSubmit}
+        reportedUserId={matchDetails?.partnerId}
+      />
     </div>
   );
 };

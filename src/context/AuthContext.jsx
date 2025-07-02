@@ -4,6 +4,7 @@ import api from '../services/api';
 import { useMyContext } from './MyContext';
 import { useLocation, useNavigate } from 'react-router-dom';
 import axios from 'axios';
+import BlockedModal from '../components/moderation/BlockedModal';
 
 const AuthContext = createContext();
 
@@ -15,6 +16,8 @@ export const AuthProvider = ({ children }) => {
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [isPremium, setIsPremium] = useState(false);
+  const [isBlocked, setIsBlocked] = useState(false);
+  const [blockInfo, setBlockInfo] = useState(null);
   const { interest } = useMyContext();
   const location = useLocation();
   const navigate = useNavigate();
@@ -48,6 +51,17 @@ export const AuthProvider = ({ children }) => {
       return userData;
     } catch (error) {
       console.error('Failed to fetch user profile:', error);
+      
+      // Check if user is blocked
+      if (error.response?.status === 403 && error.response?.data?.blocked) {
+        setIsBlocked(true);
+        setBlockInfo({
+          reason: error.response.data.reason,
+          blockedAt: error.response.data.blockedAt
+        });
+        return null;
+      }
+      
       setUser(null);
       setIsPremium(false);
       // Don't throw the error, just return null
@@ -84,12 +98,26 @@ export const AuthProvider = ({ children }) => {
   }, [location, navigate]);
 
   const login = async (email, password) => {
-    const response = await api.auth.login(email, password);
-    const { token } = response.data;
+    try {
+      const response = await api.auth.login(email, password);
+      const { token } = response.data;
 
-    localStorage.setItem('token', token);
-    await fetchUserProfile();
-    navigate('/');
+      localStorage.setItem('token', token);
+      const userData = await fetchUserProfile();
+      
+      if (!isBlocked && userData) {
+        navigate('/');
+      }
+    } catch (error) {
+      if (error.response?.status === 403 && error.response?.data?.blocked) {
+        setIsBlocked(true);
+        setBlockInfo({
+          reason: error.response.data.reason,
+          blockedAt: error.response.data.blockedAt
+        });
+      }
+      throw error;
+    }
   };
 
   const loginWithGoogle = () => {
@@ -154,6 +182,8 @@ export const AuthProvider = ({ children }) => {
     setShowAuthModal,
     showProfileModal,
     setShowProfileModal,
+    isBlocked,
+    blockInfo,
     login,
     loginWithGoogle,
     signup,
@@ -165,6 +195,11 @@ export const AuthProvider = ({ children }) => {
   return (
     <AuthContext.Provider value={value}>
       {!loading && children}
+      <BlockedModal 
+        isOpen={isBlocked} 
+        reason={blockInfo?.reason} 
+        blockedAt={blockInfo?.blockedAt} 
+      />
     </AuthContext.Provider>
   );
 };

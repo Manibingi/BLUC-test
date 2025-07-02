@@ -4,6 +4,7 @@ import passport from 'passport';
 import User from '../models/User.js';
 import authMiddleware from '../middleware/auth.middleware.js';
 import subscriptionMiddleware from '../middleware/subscription.middleware.js';
+import blockCheckMiddleware from '../middleware/blockCheck.middleware.js';
 import bcrypt from 'bcrypt';
 
 const router = express.Router();
@@ -109,7 +110,7 @@ router.put('/profile', authMiddleware, async (req, res) => {
 });
 
 // Get user profile
-router.get('/user/profile', authMiddleware, subscriptionMiddleware, async (req, res) => {
+router.get('/user/profile', authMiddleware, blockCheckMiddleware, subscriptionMiddleware, async (req, res) => {
   try {
     if (!req.user || !req.user.id) {
       return res.status(401).json({ message: 'Unauthorized - Invalid user data' });

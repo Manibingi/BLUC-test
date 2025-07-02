@@ -1,18 +1,19 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useChat } from '../../context/ChatContext';
-import { Send, X, SkipForward } from 'lucide-react';
+import { Send, X, SkipForward, Flag } from 'lucide-react';
 
 const TextChat = ({ partnerId, embedded = false, mode = "text", onClose }) => {
   const [message, setMessage] = useState('');
+  const messagesEndRef = useRef(null);
+  const [showReportModal, setShowReportModal] = useState(false);
   const [messages, setMessages] = useState([]);
   const [isTyping, setIsTyping] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState('connected');
-  const messagesEndRef = useRef(null);
   const messageTimeoutRef = useRef(null);
   const typingTimeoutRef = useRef(null);
-  
+
   const { sendMessage, disconnectFromMatch, next, isMatched, socket } = useChat();
-  
+
   // Handle cleanup on unmount or when match changes
   useEffect(() => {
     const handleUnload = () => {
@@ -20,9 +21,9 @@ const TextChat = ({ partnerId, embedded = false, mode = "text", onClose }) => {
         disconnectFromMatch(mode); 
       }
     };
-  
+
     window.addEventListener('beforeunload', handleUnload);
-  
+
     return () => {
       window.removeEventListener('beforeunload', handleUnload);
       if (messageTimeoutRef.current) {
@@ -33,7 +34,7 @@ const TextChat = ({ partnerId, embedded = false, mode = "text", onClose }) => {
       }
     };
   }, [isMatched, disconnectFromMatch, mode, partnerId]);
-  
+
   // Listen for incoming messages with improved error handling
   useEffect(() => {
     if (!socket) return;
@@ -101,16 +102,16 @@ const TextChat = ({ partnerId, embedded = false, mode = "text", onClose }) => {
       console.log("[TextChat] New partner connected:", partnerId);
     }
   }, [partnerId]);
-  
+
   // Auto scroll to bottom when new messages arrive
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
-  
+
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
-  
+
   const handleSendMessage = () => {
     if (!message.trim() || !partnerId || connectionStatus !== 'connected') {
       return;
@@ -118,7 +119,7 @@ const TextChat = ({ partnerId, embedded = false, mode = "text", onClose }) => {
 
     const messageText = message.trim();
     const messageId = Math.random().toString(36).substr(2, 9);
-    
+
     // Add to local messages immediately
     setMessages(prev => [...prev, { 
       text: messageText, 
@@ -127,14 +128,14 @@ const TextChat = ({ partnerId, embedded = false, mode = "text", onClose }) => {
       id: messageId,
       status: 'sending'
     }]);
-    
+
     // Send the message
     sendMessage(messageText, partnerId);
     console.log("[TextChat] Message sent:", messageText);
-    
+
     // Clear input
     setMessage('');
-    
+
     // Set timeout to mark message as failed if no response
     messageTimeoutRef.current = setTimeout(() => {
       setMessages(prev => prev.map(msg => 
@@ -144,14 +145,14 @@ const TextChat = ({ partnerId, embedded = false, mode = "text", onClose }) => {
       ));
     }, 1000);
   };
-  
+
   const handleKeyPress = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSendMessage();
     }
   };
-  
+
   const handleSkip = () => {
     console.log("[TextChat] Skipping to next partner");
     setMessages([]); // Clear messages when skipping
@@ -161,12 +162,12 @@ const TextChat = ({ partnerId, embedded = false, mode = "text", onClose }) => {
 
   const handleInputChange = (e) => {
     setMessage(e.target.value);
-    
+
     // Show typing indicator (if you want to implement this feature)
     if (typingTimeoutRef.current) {
       clearTimeout(typingTimeoutRef.current);
     }
-    
+
     typingTimeoutRef.current = setTimeout(() => {
       setIsTyping(false);
     }, 1000);
@@ -201,7 +202,33 @@ const TextChat = ({ partnerId, embedded = false, mode = "text", onClose }) => {
         return 'bg-gray-500';
     }
   };
-  
+
+    const handleReportSubmit = async (reportData) => {
+    try {
+      const response = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/reports/create`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        },
+        body: JSON.stringify({
+          ...reportData,
+          chatMode: 'text'
+        })
+      });
+
+      if (response.ok) {
+        alert('Report submitted successfully');
+        setShowReportModal(false);
+      } else {
+        throw new Error('Failed to submit report');
+      }
+    } catch (error) {
+      console.error('Error submitting report:', error);
+      alert('Failed to submit report. Please try again.');
+    }
+  };
+
   return (
     <div className={`flex flex-col ${embedded ? 'h-full' : 'h-[calc(100vh-64px)]'}`}>
       {/* Header */}
@@ -211,7 +238,7 @@ const TextChat = ({ partnerId, embedded = false, mode = "text", onClose }) => {
           <span className="font-medium">Stranger</span>
           <span className="text-sm text-gray-500 ml-2">({getConnectionStatusText()})</span>
         </div>
-        
+
         <div className="flex items-center gap-2">
           <button 
             onClick={handleSkip}
@@ -221,7 +248,7 @@ const TextChat = ({ partnerId, embedded = false, mode = "text", onClose }) => {
           >
             <SkipForward size={18} />
           </button>
-          
+
           {embedded && onClose && (
             <button 
               onClick={onClose}
@@ -232,7 +259,7 @@ const TextChat = ({ partnerId, embedded = false, mode = "text", onClose }) => {
           )}
         </div>
       </div>
-      
+
       {/* Messages */}
       <div className="flex-1 bg-gray-50 p-4 overflow-y-auto">
         {messages.length === 0 ? (
@@ -271,7 +298,7 @@ const TextChat = ({ partnerId, embedded = false, mode = "text", onClose }) => {
         )}
         <div ref={messagesEndRef} />
       </div>
-      
+
       {/* Input */}
       <div className="bg-white px-4 py-3 border-t">
         <div className="flex items-center">

@@ -46,6 +46,24 @@ const UserSchema = new mongoose.Schema({
   trialUsed: {
     type: Boolean,
     default: false
+  },
+  isBlocked: {
+    type: Boolean,
+    default: false
+  },
+  blockedReason: {
+    type: String
+  },
+  blockedAt: {
+    type: Date
+  },
+  blockedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
+  isAdmin: {
+    type: Boolean,
+    default: false
   }
 }, {
   timestamps: true

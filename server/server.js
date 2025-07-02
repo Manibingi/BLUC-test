@@ -8,8 +8,9 @@ import path from 'path';
 import socketHandler from './socketHandler.js';
 import Razorpay from 'razorpay';
 import authRoutes from './routes/authRoutes.js';
+import paymentRoutes from './routes/paymentRoutes.js';
 import subscriptionRoutes from './routes/subscriptionRoutes.js';
-import payment from './routes/paymentRoutes.js';
+import reportRoutes from './routes/reportRoutes.js';
 import authMiddleware from './middleware/auth.middleware.js';
 
 // Load environment variables
@@ -48,8 +49,9 @@ export var instance = new Razorpay({
 
 // Routes
 app.use('/api/auth', authRoutes);
-app.use('/api/subscription', authMiddleware, subscriptionRoutes);
-app.use('/api/razorpay', payment);
+app.use('/api/payment', paymentRoutes);
+app.use('/api/subscription', subscriptionRoutes);
+app.use('/api/reports', reportRoutes);
 
 // Socket.io setup
 io.on('connection', socket => {
@@ -59,4 +61,3 @@ io.on('connection', socket => {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
-

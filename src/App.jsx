@@ -9,6 +9,7 @@ import ProtectedRoute from './components/auth/ProtectedRoute';
 import { useAuth } from './context/AuthContext';
 import AuthModal from './components/auth/AuthModal';
 import PremiumModal from './components/premium/PremiumModal';
+import Admin from './pages/Admin'; // Import the new Admin component
 
 function App() {
   const { showAuthModal } = useAuth();
@@ -33,15 +34,23 @@ function App() {
               </ProtectedRoute>
             }
           />
-          <Route
-            path="/profile"
-            element={
-              <ProtectedRoute>
-                <Profile />
-              </ProtectedRoute>
-            }
-          />
-          <Route path="*" element={<NotFound />} />
+          <Route 
+          path="/profile" 
+          element={
+            <ProtectedRoute>
+              <Profile />
+            </ProtectedRoute>
+          } 
+        />
+        <Route 
+          path="/admin" 
+          element={
+            <ProtectedRoute>
+              <Admin />
+            </ProtectedRoute>
+          } 
+        />
+        <Route path="*" element={<NotFound />} />
         </Routes>
       </main>
       {showAuthModal && <AuthModal />}
