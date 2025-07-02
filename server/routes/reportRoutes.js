@@ -15,6 +15,11 @@ router.post('/create', authMiddleware, async (req, res) => {
     if (!reportedUserId || !reportType || !description) {
       return res.status(400).json({ message: 'Missing required fields' });
     }
+
+    // Validate ObjectId format
+    if (!reportedUserId.match(/^[0-9a-fA-F]{24}$/)) {
+      return res.status(400).json({ message: 'Invalid user ID format' });
+    }
     
     // Check if reported user exists
     const reportedUser = await User.findById(reportedUserId);
@@ -184,6 +189,33 @@ router.post('/unblock-user/:userId', authMiddleware, async (req, res) => {
     res.json({ message: 'User unblocked successfully' });
   } catch (error) {
     console.error('Error unblocking user:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Get user info by ID (admin only)
+router.get('/user/:userId', authMiddleware, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+    if (!user.isAdmin) {
+      return res.status(403).json({ message: 'Access denied. Admin only.' });
+    }
+    
+    const { userId } = req.params;
+    
+    // Validate ObjectId format
+    if (!userId.match(/^[0-9a-fA-F]{24}$/)) {
+      return res.status(400).json({ message: 'Invalid user ID format' });
+    }
+    
+    const targetUser = await User.findById(userId).select('-password');
+    if (!targetUser) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    
+    res.json(targetUser);
+  } catch (error) {
+    console.error('Error fetching user:', error);
     res.status(500).json({ message: 'Server error' });
   }
 });

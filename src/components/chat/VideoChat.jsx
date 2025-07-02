@@ -408,6 +408,7 @@ const VideoChat = ({ mode }) => {
         },
         body: JSON.stringify({
           ...reportData,
+          reportedUserId: matchDetails?.partnerUserId || reportData.reportedUserId,
           chatMode: 'video'
         })
       });
@@ -416,7 +417,8 @@ const VideoChat = ({ mode }) => {
         alert('Report submitted successfully');
         setShowReportModal(false);
       } else {
-        throw new Error('Failed to submit report');
+        const errorData = await response.json();
+        throw new Error(errorData.message || 'Failed to submit report');
       }
     } catch (error) {
       console.error('Error submitting report:', error);
@@ -698,7 +700,7 @@ const VideoChat = ({ mode }) => {
         isOpen={showReportModal}
         onClose={() => setShowReportModal(false)}
         onSubmit={handleReportSubmit}
-        reportedUserId={matchDetails?.partnerId}
+        reportedUserId={matchDetails?.partnerUserId}
       />
     </div>
   );

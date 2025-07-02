@@ -1,9 +1,9 @@
-
 const textwaitingUsers = new Map();
 const videowaitingUsers = new Map();
 const activePairs = new Map();
 const activeVideoCalls = new Set();
 const userSockets = new Map();
+const socketUsers = new Map(); // Map socket IDs to user IDs
 
 const SOCKET_RETENTION_TIME = 3 * 60 * 1000;
 const MATCH_TIMEOUT = 30000;
@@ -15,7 +15,7 @@ const waitingUsersMap = {
 
 export default (io, socket) => {
   console.log(`[Socket] User connected: ${socket.id}`);
-  
+
   // Store socket reference
   userSockets.set(socket.id, socket);
 
@@ -40,7 +40,7 @@ export default (io, socket) => {
         joinTime: Date.now(),
         isActive: true
       };
-      
+
       console.log(`[Socket] User ${socket.id} joined with:`, {
         gender,
         interest,
@@ -68,7 +68,7 @@ export default (io, socket) => {
       } else {
         waitingUsers.set(socket.id, socket);
         console.log(`[Socket] User ${socket.id} added to ${mode} waiting list. Total waiting: ${waitingUsers.size}`);
-        
+
         // Set timeout for waiting users
         const timeoutId = setTimeout(() => {
           if (waitingUsers.has(socket.id)) {
@@ -89,29 +89,36 @@ export default (io, socket) => {
     }
   });
 
+    socket.on('user-authenticated', (userData) => {
+      console.log('User authenticated:', userData.userId);
+      userSockets.set(socket.id, userData.userId);
+      socketUsers.set(socket.id, userData.userId);
+      socket.userId = userData.userId;
+    });
+
   socket.on('send-message', (message, toSocketId) => {
     try {
       console.log(`[Message] From ${socket.id} to ${toSocketId}: ${message?.substring(0, 50)}...`);
-      
+
       // Validate message
       if (!message || typeof message !== 'string' || message.trim().length === 0) {
         console.log(`[Message] Invalid message from ${socket.id}`);
         return;
       }
-      
+
       if (message.length > 1000) {
         console.log(`[Message] Message too long from ${socket.id}`);
         socket.emit('error', { message: 'Message too long' });
         return;
       }
-      
+
       // Check if users are actually paired
       const partnerId = activePairs.get(socket.id);
       if (partnerId !== toSocketId) {
         console.log(`[Message] Unauthorized message attempt from ${socket.id} to ${toSocketId}`);
         return;
       }
-      
+
       const target = userSockets.get(toSocketId) || io.sockets.sockets.get(toSocketId);
       if (target && target.connected) {
         target.emit('receive-message', message.trim());
@@ -129,7 +136,7 @@ export default (io, socket) => {
   socket.on('disconnect-chat', (partnerSocketId, mode) => {
     try {
       console.log(`[Disconnect] ${socket.id} disconnecting from ${partnerSocketId} in ${mode} mode`);
-      
+
       const partnerSocket = userSockets.get(partnerSocketId) || io.sockets.sockets.get(partnerSocketId);
 
       if (mode === "video") {
@@ -149,7 +156,7 @@ export default (io, socket) => {
       // Clean up the pair
       activePairs.delete(socket.id);
       activePairs.delete(partnerSocketId);
-      
+
       console.log(`[Disconnect] Cleanup completed for ${socket.id} and ${partnerSocketId}`);
     } catch (error) {
       console.error(`[Socket] Error in disconnect-chat:`, error);
@@ -159,23 +166,23 @@ export default (io, socket) => {
   socket.on('next', (partnerSocketId, mode) => {
     try {
       console.log(`[Next] ${socket.id} skipping partner ${partnerSocketId} in ${mode} mode`);
-      
+
       const partnerSocket = userSockets.get(partnerSocketId) || io.sockets.sockets.get(partnerSocketId);
-      
+
       if (mode === "video") {
         handleVideoCallEnd(socket.id, partnerSocketId);
       }
-      
+
       // Clean up the pair
       activePairs.delete(socket.id);
       activePairs.delete(partnerSocketId);
-      
+
       // Notify both users to find new partners
       if (partnerSocket && partnerSocket.connected) {
         console.log(`[Next] Notifying partner ${partnerSocketId} to find other`);
         partnerSocket.emit("find other");
       }
-      
+
       console.log(`[Next] Notifying current user ${socket.id} to find other`);
       socket.emit("find other");
     } catch (error) {
@@ -186,17 +193,18 @@ export default (io, socket) => {
   socket.on('disconnect', (reason) => {
     try {
       console.log(`[Socket] User ${socket.id} disconnected: ${reason}`);
-      
+
       // Clear heartbeat
       clearInterval(heartbeatInterval);
-      
+
       // Clear match timeout if exists
       if (socket.matchTimeout) {
         clearTimeout(socket.matchTimeout);
       }
-      
+
       cleanupUserConnections(socket.id);
       userSockets.delete(socket.id);
+      socketUsers.delete(socket.id);
     } catch (error) {
       console.error(`[Socket] Error in disconnect:`, error);
     }
@@ -206,20 +214,20 @@ export default (io, socket) => {
   socket.on("video-offer", (offer, toSocketId) => {
     try {
       console.log(`[Video] Offer from ${socket.id} to ${toSocketId}`);
-      
+
       // Validate offer
       if (!offer || !offer.type || !offer.sdp) {
         console.log(`[Video] Invalid offer from ${socket.id}`);
         return;
       }
-      
+
       // Validate that users are paired
       const partnerId = activePairs.get(socket.id);
       if (partnerId !== toSocketId) {
         console.log(`[Video] Unauthorized offer from ${socket.id} to ${toSocketId}`);
         return;
       }
-      
+
       const target = userSockets.get(toSocketId) || io.sockets.sockets.get(toSocketId);
       if (target && target.connected) {
         target.emit("video-offer", offer, socket.id);
@@ -238,20 +246,20 @@ export default (io, socket) => {
   socket.on("video-answer", (answer, toSocketId) => {
     try {
       console.log(`[Video] Answer from ${socket.id} to ${toSocketId}`);
-      
+
       // Validate answer
       if (!answer || !answer.type || !answer.sdp) {
         console.log(`[Video] Invalid answer from ${socket.id}`);
         return;
       }
-      
+
       // Validate that users are paired
       const partnerId = activePairs.get(socket.id);
       if (partnerId !== toSocketId) {
         console.log(`[Video] Unauthorized answer from ${socket.id} to ${toSocketId}`);
         return;
       }
-      
+
       const target = userSockets.get(toSocketId) || io.sockets.sockets.get(toSocketId);
       if (target && target.connected) {
         target.emit("video-answer", answer);
@@ -272,16 +280,16 @@ export default (io, socket) => {
         console.log(`[ICE] Empty candidate from ${socket.id}`);
         return;
       }
-      
+
       console.log(`[ICE] Candidate from ${socket.id} to ${toSocketId} (type: ${candidate.type || 'unknown'})`);
-      
+
       // Validate that users are paired
       const partnerId = activePairs.get(socket.id);
       if (partnerId !== toSocketId) {
         console.log(`[ICE] Unauthorized ICE candidate from ${socket.id} to ${toSocketId}`);
         return;
       }
-      
+
       const target = userSockets.get(toSocketId) || io.sockets.sockets.get(toSocketId);
       if (target && target.connected) {
         target.emit("ice-candidate", candidate);
@@ -299,16 +307,16 @@ export default (io, socket) => {
   socket.on("end-call", (partnerId) => {
     try {
       console.log(`[Video] End call from ${socket.id} to ${partnerId}`);
-      
+
       // Remove from waiting lists
       videowaitingUsers.delete(socket.id);
-      
+
       const partnerSocket = userSockets.get(partnerId) || io.sockets.sockets.get(partnerId);
       if (partnerSocket && partnerSocket.connected) {
         partnerSocket.emit("end-video");
         partnerSocket.emit("find other");
       }
-      
+
       handleVideoCallEnd(socket.id, partnerId);
       socket.emit("find other");
     } catch (error) {
@@ -325,7 +333,7 @@ export default (io, socket) => {
 
   function findBestMatch(socket, waitingUsers) {
     console.log(`[Match] Finding match for ${socket.id} with data:`, socket.data);
-    
+
     if (waitingUsers.size === 0) {
       console.log(`[Match] No users waiting in ${socket.data.mode} mode`);
       return null;
@@ -337,7 +345,7 @@ export default (io, socket) => {
 
     for (let [id, otherSocket] of waitingUsers) {
       if (id === socket.id) continue;
-      
+
       // Skip if other socket is not active or doesn't have data
       if (!otherSocket.data || !otherSocket.data.isActive || !otherSocket.connected) {
         console.log(`[Match] Skipping inactive socket ${id}`);
@@ -347,10 +355,10 @@ export default (io, socket) => {
 
       const interestsMatch = socket.data.interest && otherSocket.data.interest && 
                            socket.data.interest.toLowerCase() === otherSocket.data.interest.toLowerCase();
-      
+
       const genderMatches = socket.data.selectedGender === "random" || 
                            otherSocket.data.gender === socket.data.selectedGender;
-      
+
       const reverseGenderMatches = otherSocket.data.selectedGender === "random" || 
                                   socket.data.gender === otherSocket.data.selectedGender;
 
@@ -408,8 +416,17 @@ export default (io, socket) => {
       socketA.data.isActive = true;
       socketB.data.isActive = true;
 
-      socketA.emit("match-found", { matched: true, socketId: socketB.id });
-      socketB.emit("match-found", { matched: true, socketId: socketA.id });
+       socketB.emit('match-found', {
+          partnerId: socketA.id,
+          partnerUserId: socketA.userId,
+          isInitiator: false
+        });
+
+        socketA.emit('match-found', {
+          partnerId: socketB.id,
+          partnerUserId: socketB.userId,
+          isInitiator: true
+        });
 
       activePairs.set(socketA.id, socketB.id);
       activePairs.set(socketB.id, socketA.id);
@@ -428,7 +445,7 @@ export default (io, socket) => {
   function cleanupUserConnections(userId) {
     try {
       console.log(`[Cleanup] Cleaning up connections for user: ${userId}`);
-      
+
       // Remove from waiting lists
       videowaitingUsers.delete(userId);
       textwaitingUsers.delete(userId);
@@ -443,7 +460,7 @@ export default (io, socket) => {
           partnerSocket.emit("disconect", "Partner disconnected unexpectedly.");
           partnerSocket.emit("find other");
         }
-        
+
         // Clean up the pair
         activePairs.delete(userId);
         activePairs.delete(partnerId);
@@ -456,7 +473,7 @@ export default (io, socket) => {
           callsToRemove.push(callId);
         }
       }
-      
+
       callsToRemove.forEach(callId => {
         activeVideoCalls.delete(callId);
         console.log(`[Cleanup] Removed video call: ${callId}`);
@@ -471,24 +488,24 @@ export default (io, socket) => {
   function handleVideoCallEnd(userId, partnerId) {
     try {
       console.log(`[Video] Ending video call between ${userId} and ${partnerId}`);
-      
+
       // Remove all possible call combinations
       const callVariations = [
         `${userId}-${partnerId}`,
         `${partnerId}-${userId}`
       ];
-      
+
       callVariations.forEach(callId => {
         if (activeVideoCalls.has(callId)) {
           activeVideoCalls.delete(callId);
           console.log(`[Video] Removed video call: ${callId}`);
         }
       });
-      
+
       // Clean up active pairs
       activePairs.delete(userId);
       activePairs.delete(partnerId);
-      
+
       console.log(`[Video] Video call cleanup completed`);
     } catch (error) {
       console.error(`[Socket] Error in handleVideoCallEnd:`, error);
@@ -499,7 +516,7 @@ export default (io, socket) => {
   setInterval(() => {
     try {
       const now = Date.now();
-      
+
       // Clean up stale waiting users
       [videowaitingUsers, textwaitingUsers].forEach((waitingUsers, index) => {
         const mode = index === 0 ? 'video' : 'text';
@@ -513,36 +530,36 @@ export default (io, socket) => {
           }
         }
       });
-      
+
       // Clean up stale active pairs
       for (let [userId, partnerId] of activePairs) {
         const userSocket = userSockets.get(userId) || io.sockets.sockets.get(userId);
         const partnerSocket = userSockets.get(partnerId) || io.sockets.sockets.get(partnerId);
-        
+
         if (!userSocket || !userSocket.connected || !partnerSocket || !partnerSocket.connected) {
           console.log(`[Cleanup] Removing stale active pair: ${userId} <-> ${partnerId}`);
           activePairs.delete(userId);
           activePairs.delete(partnerId);
         }
       }
-      
+
       // Clean up stale video calls
       const staleVideoCalls = [];
       for (const callId of activeVideoCalls) {
         const [userId, partnerId] = callId.split('-');
         const userSocket = userSockets.get(userId) || io.sockets.sockets.get(userId);
         const partnerSocket = userSockets.get(partnerId) || io.sockets.sockets.get(partnerId);
-        
+
         if (!userSocket || !userSocket.connected || !partnerSocket || !partnerSocket.connected) {
           staleVideoCalls.push(callId);
         }
       }
-      
+
       staleVideoCalls.forEach(callId => {
         activeVideoCalls.delete(callId);
         console.log(`[Cleanup] Removed stale video call: ${callId}`);
       });
-      
+
     } catch (error) {
       console.error(`[Cleanup] Error during periodic cleanup:`, error);
     }
